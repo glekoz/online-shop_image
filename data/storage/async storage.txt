@@ -1,0 +1,97 @@
+АСИНХРОННЫЙ
+
+func (s Storage) Save(ctx context.Context, dir, id string, img image.Image) (string, error) {
+	errChan := make(chan error, 1)
+	resultChan := make(chan string, 1)
+
+	go func() (err error) {
+		defer func() {
+			close(errChan)
+			close(resultChan)
+		}()
+		pwd := filepath.Join(s.Path, dir)
+		err = os.MkdirAll(pwd, 0o777)
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)
+			return
+		}
+
+		if err = ctx.Err(); err != nil {
+			errChan <- fmt.Errorf("Storage.Save: context: %w", err)
+			return
+		}
+
+		filePath := filepath.Join(pwd, id+".jpeg")
+		file, err := os.Create(filePath)
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: os.Create: %w", err)
+			return
+		}
+
+		if err = ctx.Err(); err != nil {
+			errChan <- fmt.Errorf("Storage.Save context: %w", err)
+			return
+		}
+
+		defer func() {
+			file.Close()
+			if ctx.Err() != nil || err != nil {
+				os.Remove(filePath) // если контекст отменен, то удаляем файл, чтобы не оставлять мусор
+			}
+		}()
+
+		err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95})
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)
+			return
+		}
+		resultChan <- filePath // возвращаем путь к файлу, чтобы можно было сразу использовать в других методах
+		return nil
+	}()
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("Storage.Save context: %w", ctx.Err())
+	case err := <-errChan:
+		return "", fmt.Errorf("Storage.Save: %w", err)
+	case filePath := <-resultChan:
+		return filePath, nil
+	}
+}
+
+
+СИНХРОННЫЙ
+
+func (s Storage) Save(ctx context.Context, dir, id string, img image.Image) (string, error) {
+	pwd := filepath.Join(s.Path, dir)
+	err := os.MkdirAll(pwd, 0o777)
+	if err != nil {
+		return "", fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)
+	}
+
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("Storage.Save: context error: %w", ctx.Err())
+	}
+
+	filePath := filepath.Join(pwd, id+".jpeg")
+	file, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("Storage.Save: os.Create: %w", err)
+	}
+	defer func() {
+		file.Close()
+		if ctx.Err() != nil {
+			os.Remove(filePath)
+		}
+	}()
+
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("Storage.Save: context error: %w", ctx.Err())
+	}
+
+	if err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95}); err != nil {
+		file.Close() // для Windows
+		os.Remove(filePath)
+		return "", fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)
+	}
+	return filePath, nil
+}

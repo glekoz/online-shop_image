@@ -1,13 +1,12 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"os"
 	"path/filepath"
-
-	"github.com/Gleb988/online-shop_image/internal/models"
 )
 
 type Storage struct {
@@ -16,63 +15,79 @@ type Storage struct {
 
 func NewStorage(p string) (Storage, error) {
 	if err := os.MkdirAll(p, 0o777); err != nil {
-		return Storage{}, fmt.Errorf("%w: NewStorage: user mkdir failed: "+err.Error(), models.ErrOSAction)
+		return Storage{}, fmt.Errorf("NewStorage: os.MkdirAll: %w", err)
 	}
 	return Storage{Path: p}, nil
 }
 
 // надо что-то думать насчет аргументов
 // как будто нужны уже целые пути, а не составные части
-func (s Storage) Save(dir, id string, img image.Image) (string, error) {
-	pwd := filepath.Join(s.Path, dir)
-	err := os.MkdirAll(pwd, 0o777)
-	if err != nil {
-		return "", fmt.Errorf("%w: Storage.Save: os.MkdirAll failed: "+err.Error(), models.ErrOSAction)
-	}
+func (s Storage) Save(ctx context.Context, dir, id string, img image.Image) (string, error) {
+	errChan := make(chan error, 1)
+	resultChan := make(chan string, 1)
 
-	filePath := filepath.Join(pwd, id+".jpeg")
-	file, err := os.Create(filePath)
-	if err != nil {
-		return "", fmt.Errorf("%w: Storage.Save: os.Create failed: "+err.Error(), models.ErrOSAction)
-	}
-	defer file.Close()
+	go func() (err error) {
+		defer func() {
+			close(errChan)
+			close(resultChan)
+		}()
+		pwd := filepath.Join(s.Path, dir)
+		err = os.MkdirAll(pwd, 0o777)
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)
+			return
+		}
 
-	if err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95}); err != nil {
-		file.Close() // для Windows
-		os.Remove(filePath)
-		return "", fmt.Errorf("%w: Storage.Save: jpeg.Encode failed: "+err.Error(), models.ErrOperationAction)
+		if err = ctx.Err(); err != nil {
+			errChan <- fmt.Errorf("Storage.Save: context: %w", err)
+			return
+		}
+
+		filePath := filepath.Join(pwd, id+".jpeg") // ТУТ НУЖЕН ".jpeg"
+		file, err := os.Create(filePath)
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: os.Create: %w", err)
+			return
+		}
+
+		defer func() {
+			file.Close()
+			if ctx.Err() != nil || err != nil {
+				os.Remove(filePath) // если контекст отменен, то удаляем файл, чтобы не оставлять мусор
+			}
+		}()
+
+		if err = ctx.Err(); err != nil {
+			errChan <- fmt.Errorf("Storage.Save context: %w", err)
+			return
+		}
+
+		err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95})
+		if err != nil {
+			errChan <- fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)
+			return
+		}
+		resultChan <- filePath // возвращаем путь к файлу, чтобы можно было использовать в других методах
+		return nil
+	}()
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("Storage.Save context: %w", ctx.Err())
+	case err := <-errChan:
+		return "", fmt.Errorf("Storage.Save: %w", err)
+	case filePath := <-resultChan:
+		return filePath, nil
 	}
-	return filePath, nil
 }
 
 func (s Storage) Delete(imgPath string) error {
+	if imgPath == "" {
+		return nil
+	}
 	filePath := filepath.Join(s.Path, imgPath)
 	err := os.Remove(filePath)
 	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
-	return nil
-}
-
-// Подумать, какие аргументы принимать
-func (s Storage) UpdateMainPhoto(dir, id string, img image.Image) error { // создавать новый файл во временной директории!
-	newFileDirPAth := filepath.Join(s.Path, dir, "tmp")
-	newFilePath := filepath.Join(newFileDirPAth, id)
-	newFile, err := os.Create(newFilePath)
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
-	defer func() {
-		newFile.Close()
-		os.RemoveAll(newFileDirPAth)
-	}()
-	err = jpeg.Encode(newFile, img, &jpeg.Options{Quality: 90})
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
-	oldFilePath := filepath.Join(s.Path, dir, id+".jpeg")
-	if err = os.Rename(newFilePath, oldFilePath); err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
+		return fmt.Errorf("Storage.Delete: os.Remove: %w", err)
 	}
 	return nil
 }
@@ -81,7 +96,7 @@ func (s Storage) ItemsInDir(dir string) (int, error) {
 	pwd := filepath.Join(s.Path, dir)
 	files, err := os.ReadDir(pwd)
 	if err != nil {
-		return 0, fmt.Errorf("%w: Storage.Save: os.ReadDir failed: "+err.Error(), models.ErrOSAction)
+		return 0, fmt.Errorf("Storage.ItemsInDir: os.ReadDir: %w", err)
 	}
 	return len(files), nil
 }
@@ -89,12 +104,12 @@ func (s Storage) ItemsInDir(dir string) (int, error) {
 func (s Storage) GetRawImage(path string) (image.Image, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: Storage.GetRawImage: os.Open failed: "+err.Error(), models.ErrOSAction)
+		return nil, fmt.Errorf("Storage.GetRawImage: os.Open: %w", err)
 	}
 	defer file.Close()
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return nil, fmt.Errorf("%w: Storage.GetRawImage: image.Decode failed: "+err.Error(), models.ErrOperationAction)
+		return nil, fmt.Errorf("Storage.GetRawImage: image.Decode: %w", err)
 	}
 	return img, nil
 }
@@ -113,5 +128,34 @@ func (s Storage) Get(service, id, index string) (io.ReadCloser, int64, error) {
 	}
 	size := stat.Size()
 	return file, size, nil
+}
+
+// не используется, так как перенес в БД сервиса переставление флага с одного изображения на другое
+// Подумать, какие аргументы принимать
+func (s Storage) UpdateMainPhoto(ctx context.Context, dir, id string, img image.Image) error { // создавать новый файл во временной директории!
+	newFileDirPath := filepath.Join(s.Path, dir, "tmp")
+	newFilePath := filepath.Join(newFileDirPath, id)
+	newFile, err := os.Create(newFilePath)
+	if err != nil {
+		return fmt.Errorf("Storage.UpdateMainPhoto: os.Create: %w", err)
+	}
+	defer func() {
+		newFile.Close()
+		os.RemoveAll(newFileDirPath)
+	}()
+
+	if err = ctx.Err(); err != nil {
+		return fmt.Errorf("Storage.UpdateMainPhoto: context: %w", ctx.Err())
+	}
+
+	err = jpeg.Encode(newFile, img, &jpeg.Options{Quality: 90})
+	if err != nil {
+		return fmt.Errorf("Storage.UpdateMainPhoto: jpeg.Encode: %w", err)
+	}
+	oldFilePath := filepath.Join(s.Path, dir, id)
+	if err = os.Rename(newFilePath, oldFilePath); err != nil {
+		return fmt.Errorf("Storage.UpdateMainPhoto: os.Rename: %w", err)
+	}
+	return nil
 }
 */

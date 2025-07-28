@@ -1,29 +1,29 @@
 package application
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	amt "github.com/Gleb988/online-shop_amt"
 	"github.com/Gleb988/online-shop_image/internal/models"
 )
 
 type SyncController struct {
-	ProductAMT        amt.AMT
-	UserAMT           amt.AMT
+	ProductAMT        AMTAPI
+	UserAMT           AMTAPI
 	ImageCount        map[string]int
 	ReqCountMutex     sync.RWMutex
 	ReqCount          map[string]int
 	ProcessCountMutex sync.RWMutex
 	ProcessCount      map[string]int
-	DirSyncMutex      sync.Mutex
+	DirSyncMutex      sync.RWMutex
 	DirSync           map[string]chan struct{}
 }
 
-func NewSyncController(s StorageAPI, product, user amt.AMT) *SyncController {
+func NewSyncController(s StorageAPI, product, user AMTAPI) *SyncController {
 	imageCount := make(map[string]int)
 	reqCount := make(map[string]int)
 	processCount := make(map[string]int)
@@ -58,13 +58,17 @@ func (sc *SyncController) PossibleToSave(service, dir string) (bool, error) { //
 
 func (sc *SyncController) ProcessCountIncrement(dir string) {
 	sc.ProcessCountMutex.Lock()
+	defer sc.ProcessCountMutex.Unlock()
 	sc.ProcessCount[dir]++
-	sc.ProcessCountMutex.Unlock()
 }
 
-func (sc *SyncController) SyncMemoryClean(dir string) error {
+func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error {
 	sc.ProcessCountMutex.RLock()
 	sc.ReqCountMutex.RLock()
+	defer func() {
+		sc.ReqCountMutex.RUnlock()
+		sc.ProcessCountMutex.RUnlock()
+	}()
 
 	if sc.ProcessCount[dir] == sc.ReqCount[dir] {
 		serviceName := strings.ToLower(filepath.SplitList(dir)[0])
@@ -80,13 +84,13 @@ func (sc *SyncController) SyncMemoryClean(dir string) error {
 			return fmt.Errorf("%w: "+err.Error(), models.ErrOperationAction)
 		}
 		if serviceName == "product" {
-			err := sc.ProductAMT.Publish(msg)
+			err := sc.ProductAMT.Publish(ctx, msg)
 			if err != nil {
 				// залогировать
 				return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
 			}
 		} else {
-			err := sc.UserAMT.Publish(msg)
+			err := sc.UserAMT.Publish(ctx, msg)
 			if err != nil {
 				// залогировать
 				return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
@@ -98,14 +102,18 @@ func (sc *SyncController) SyncMemoryClean(dir string) error {
 		delete(sc.ProcessCount, dir)
 		delete(sc.ReqCount, dir)
 	}
-	sc.ReqCountMutex.RUnlock()
-	sc.ProcessCountMutex.RUnlock()
 	return nil
 }
 
 func (sc *SyncController) DirSyncChannel(dir string) chan struct{} {
-	sc.DirSyncMutex.Lock()
+	sc.DirSyncMutex.RLock()
 	token, ok := sc.DirSync[dir]
+	sc.DirSyncMutex.RUnlock()
+	if ok {
+		return token
+	}
+	sc.DirSyncMutex.Lock()
+	token, ok = sc.DirSync[dir]
 	if !ok {
 		token = make(chan struct{}, 1)
 		sc.DirSync[dir] = token
@@ -116,12 +124,12 @@ func (sc *SyncController) DirSyncChannel(dir string) chan struct{} {
 
 func (sc *SyncController) ReqCountDecrement(req string) {
 	sc.ReqCountMutex.Lock()
+	defer sc.ReqCountMutex.Unlock()
 	sc.ReqCount[req]--
-	sc.ReqCountMutex.Unlock()
 }
 
 func (sc *SyncController) ReqCountIncrement(req string) {
 	sc.ReqCountMutex.Lock()
+	defer sc.ReqCountMutex.Unlock()
 	sc.ReqCount[req]++
-	sc.ReqCountMutex.Unlock()
 }

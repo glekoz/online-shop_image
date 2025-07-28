@@ -1,23 +1,21 @@
 package application
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
 	"path/filepath"
 	"strings"
-	"time"
 
-	amt "github.com/Gleb988/online-shop_amt"
 	"github.com/Gleb988/online-shop_image/internal/models"
 	"github.com/google/uuid"
 )
 
 type StorageAPI interface {
-	Save(dir, id string, img image.Image) (string, error)
+	Save(ctx context.Context, dir, id string, img image.Image) (string, error)
 	Delete(imgPath string) error
-	UpdateMainPhoto(dir, id string, img image.Image) error
+	// UpdateMainPhoto(dir, id string, img image.Image) error - ЭТО ВООБЩЕ ЗАПАРА СЕРВИСА, А НЕ КАРТИНОК
 	ItemsInDir(dir string) (int, error)
 	GetRawImage(path string) (image.Image, error)
 }
@@ -27,19 +25,27 @@ type CacheAPI interface {
 	Save(string, int) error
 }
 
+type AMTAPI interface {
+	Publish(context.Context, []byte) error
+}
+
 type App struct {
 	Storage    StorageAPI
-	ProductAMT amt.AMT
-	UserAMT    amt.AMT
-	ImageAMT   amt.AMT
+	ProductAMT AMTAPI
+	UserAMT    AMTAPI
+	ImageAMT   AMTAPI
 	SC         *SyncController
+	// Logger говорят, надо саму ошибку в месте появления логировать
+	// Jaeger tracer
 }
+
+// метрики в хендлере, а не в сервисе
 
 // ВОТ ТУТ УЖЕ ВСЕ ОШИБКИ НАДО ЛОГИРОВАТЬ!!!
 
 // общение с различными сервисами уже в main функции можно настроить с помощью одного соединения amt.Dial()
 // но настройки у всех разные, поэтому надо 3 экземпляра и передать
-func NewApp(s StorageAPI, product, user, image amt.AMT) *App {
+func NewApp(s StorageAPI, product, user, image AMTAPI) *App {
 	syncController := NewSyncController(s, product, user)
 	return &App{Storage: s, ProductAMT: product, UserAMT: user, ImageAMT: image, SC: syncController}
 }
@@ -49,42 +55,85 @@ func NewApp(s StorageAPI, product, user, image amt.AMT) *App {
 // которое передается в дальнейших запросах к этому сервису
 // создается в сервисе ещё и таблица со списиком изображений,
 // и таблица с количеством изображений, статусом, есть ли сейчас изображения в обработке, и общем количестве разрешенных иозбражений
-func (a *App) InitialSave(service, dirName string, img []byte) error { // может, сразу изображение давать? 100% зря логику вызывать не буду
-	serviceDirName := filepath.Join(service, dirName)
-	imageReader := bytes.NewReader(img)
-	imgimg, _, err := image.Decode(imageReader)
-	if err != nil {
-		// залогировать
-		return fmt.Errorf("%w: image.Decode failed: "+err.Error(), models.ErrOperationAction)
-	}
+func (a *App) InitialSave(ctx context.Context, service, dirName string, img image.Image) error { // может, сразу изображение давать? 100% зря логику вызывать не буду
 
-	tmpName := uuid.New().String()
-	tmpDirPath := filepath.Join(serviceDirName, "tmp")
-	tmpImgPath, err := a.Storage.Save(tmpDirPath, tmpName, imgimg)
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
+	errChan := make(chan error, 1)
 
-	// убрать +".jpeg", добавить метод в StorageAPI, который будет читать (открывать)
-	// временное изображение
-	amtMsg := models.ProcessImageMessage{
-		ServiceDirName: serviceDirName,
-		ImagePath:      tmpImgPath,
-	}
-	msg, err := json.Marshal(amtMsg)
-	if err != nil {
-		a.Storage.Delete(tmpImgPath) // удалить временное изображение, если не удалось опубликовать сообщение
-		// залогировать
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOperationAction)
-	}
+	go func(ch chan<- error) (err error) {
+		defer close(ch)
 
-	err = a.ImageAMT.Publish(msg)
-	if err != nil {
-		a.Storage.Delete(tmpImgPath) // удалить временное изображение, если не удалось опубликовать сообщение
+		serviceDirName := filepath.Join(service, dirName)
+
+		/*
+			вынести в хендлер
+				imageReader := bytes.NewReader(img)
+				imgimg, _, err := image.Decode(imageReader)
+				if err != nil {
+					ch <- fmt.Errorf("App.InitialSave: image.Decode: %w", err) // мб стоит добавиь свои модели ошибок
+					return nil
+				}
+		*/
+		if ctx.Err() != nil {
+			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
+			return nil
+		}
+
+		tmpName := uuid.New().String()
+		tmpDirPath := filepath.Join(serviceDirName, "tmp")
+		tmpImgPath, err := a.Storage.Save(ctx, tmpDirPath, tmpName, img)
+		if err != nil {
+			ch <- fmt.Errorf("App.InitialSave: Storage.Save: %w", err) // ок для логирования, но для передачи ошибок выше надо что-то другое придумать
+			return err
+		}
+
+		defer func() {
+			if ctx.Err() != nil || err != nil {
+				a.Storage.Delete(tmpImgPath) // удалить временное изображение, если не удалось опубликовать сообщение
+			}
+		}()
+
+		if ctx.Err() != nil {
+			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
+			return
+		}
+
+		amtMsg := models.ProcessImageMessage{
+			ServiceDirName: serviceDirName,
+			ImagePath:      tmpImgPath,
+		}
+		msg, err := json.Marshal(amtMsg)
+		if err != nil {
+			ch <- fmt.Errorf("App.InitialSave: json.Marshal: %w", err)
+			return err
+		}
+
+		err = a.ImageAMT.Publish(ctx, msg)
+		if err != nil {
+			ch <- fmt.Errorf("App.InitialSave: ImageAMT.Publish: %w", err)
+			return err
+		}
+
+		if ctx.Err() != nil {
+			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
+			return
+		}
+
+		a.SC.ReqCountIncrement(serviceDirName)
+
+		return nil
+	}(errChan)
+
+	select {
+	case <-ctx.Done():
 		// залогировать
-		return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
+		return ctx.Err()
+	case err := <-errChan:
+		if err != nil {
+			// залогировать
+			return err // хотя само по себе ерр мб нил, но логировать тогда что?
+		}
+		return nil
 	}
-	a.SC.ReqCountIncrement(serviceDirName)
 	// И ТУТ МНЕ НЕ НУЖНА УНИКАЛЬНАЯ БЛОКИРОВКА НА ДИРЕКТОРИЮ - У МЕНЯ ТОЛЬКО 2 ОБЩИЕ МАПЫ, КОТОРЫЕ СЧИТАЮТ, НЕ ПРЕВЫШЕН ЛИ ЛИМИТ
 	// И ПОТОМ ДЕЛАЙ ЧТО ХОЧЕШЬ, ТОЛЬКО ПУТЬ К ВРЕМЕННОМУ НЕОБРАБОТАННОМУ ИЗОБРАЖЕНИЮ ПЕРЕДАЙ
 	// А КЭШ ДЛЯ ШЛЮЗА НУЖЕН плюс там в БД склада добавлю колонку для общего количества изображений для выбранного товара
@@ -104,72 +153,109 @@ func (a *App) InitialSave(service, dirName string, img []byte) error { // мож
 
 	// тут будет проверка на количество фоток в директории, эта же проверка должна быть и в таблице, связанной с товаром
 	// и не позволит отправить ещё фотографии уже в шлюзе
-	return nil
 }
 
 // а этот из AMT
 // значит, нужна система ошибок и контексты
-func (a *App) ProcessedSave(serviceDirName, imgPath string) error { // img = full path to temp raw image file
-	img, err := a.Storage.GetRawImage(imgPath)
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
+func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string) error { // img = full path to temp raw image file
 
-	// блок кода для обработки изображений - пока просто перекрасить в серый
-	grayImg := toGrayScale(img)
+	errChan := make(chan error, 1)
 
-	token := a.SC.DirSyncChannel(serviceDirName)
-	token <- struct{}{}
-	defer func() {
-		<-token
-		err := a.SC.SyncMemoryClean(serviceDirName) // сделать именованную ошибку, чтобы ещё ошибку при публикации можно было зарегистрировать
-		// хотя по итогу всё равно запрещу ретраить
+	go func(ch chan<- error) (err error) {
+		defer close(ch)
+
+		img, err := a.Storage.GetRawImage(imgPath)
+		if err != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: Storage.GetRawImage: %w - %w", err, models.ErrDoNotRetry)
+			return nil
+		}
+
+		if ctx.Err() != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
+			return nil
+		}
+
+		// блок кода для обработки изображений - пока просто перекрасить в серый
+		grayImg, err := toGrayScale(ctx, img)
+		if err != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: toGrayScale: %w - %w", err, models.ErrDoNotRetry)
+			return nil
+		}
+
+		token := a.SC.DirSyncChannel(serviceDirName)
+		token <- struct{}{}
+		defer func() {
+			<-token
+			err := a.SC.SyncMemoryClean(ctx, serviceDirName) // сделать именованную ошибку, чтобы ещё ошибку при публикации можно было зарегистрировать
+			// хотя по итогу всё равно запрещу ретраить
+			if err != nil {
+				// залогировать
+			}
+		}()
+
+		if ctx.Err() != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
+			return nil
+		}
+
+		id := uuid.New().String()
+		imagePath, err := a.Storage.Save(ctx, serviceDirName, id, grayImg)
+		if err != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: Storage.Save: %w - %w", err, models.ErrDoNotRetry)
+			return nil
+		}
+
+		defer func() {
+			if ctx.Err() != nil || err != nil {
+				a.Storage.Delete(imagePath) // удалить сохраненное изображение, если не удалось опубликовать сообщение
+			}
+		}()
+
+		// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
+		serviceName := strings.ToLower(filepath.SplitList(serviceDirName)[0])
+		dir := filepath.SplitList(serviceDirName)[1]
+		tmpmsg := models.ImageSavedMessage{
+			DirName:   dir,
+			ImagePath: imagePath,
+		}
+		msg, err := json.Marshal(tmpmsg)
+		if err != nil {
+			ch <- fmt.Errorf("App.ProcessedSave: json.Marshal: %w - %w", err, models.ErrDoNotRetry)
+			return err
+		}
+
+		if serviceName == "product" {
+			err = a.ProductAMT.Publish(ctx, msg)
+		} else {
+			err = a.UserAMT.Publish(ctx, msg)
+		}
+		if err != nil {
+			ch <- fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
+			return err
+		}
+
+		a.SC.ProcessCountIncrement(serviceDirName)
+
+		err = a.Storage.Delete(imgPath) // не самая критичная часть
 		if err != nil {
 			// залогировать
+			// не критично, что не удалось удалить временное изображение, но лучше удалить
 		}
-	}()
+		return nil
 
-	id := uuid.New().String()
-	imagePath, err := a.Storage.Save(serviceDirName, id, &grayImg)
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOSAction)
-	}
-	// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
-	serviceName := strings.ToLower(filepath.SplitList(serviceDirName)[0])
-	dir := filepath.SplitList(serviceDirName)[1]
-	tmpmsg := models.ImageSavedMessage{
-		DirName:   dir,
-		ImagePath: imagePath,
-	}
-	msg, err := json.Marshal(tmpmsg)
-	if err != nil {
-		return fmt.Errorf("%w: "+err.Error(), models.ErrOperationAction)
-	}
-	for i := range 3 {
-		var err error
-		if serviceName == "product" {
-			err = a.ProductAMT.Publish(msg)
-		} else {
-			err = a.UserAMT.Publish(msg)
-		}
-		if err == nil {
-			break
-		}
-		if i == 2 {
-			a.Storage.Delete(imagePath) // удалить сохраненное изображение, если не удалось опубликовать сообщение
-			return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
-		}
-		time.Sleep(2 * time.Second) // подождать 2 секунды, чтобы не перегружать сеть
-	}
+	}(errChan)
 
-	a.SC.ProcessCountIncrement(serviceDirName)
-
-	err = a.Storage.Delete(imgPath) // не самая критичная часть
-	if err != nil {
+	select {
+	case <-ctx.Done():
 		// залогировать
-		// не критично, что не удалось удалить временное изображение, но лучше удалить
+		return ctx.Err()
+	case err := <-errChan:
+		if err != nil {
+			// залогировать
+			return err // хотя само по себе ерр мб нил, но логировать тогда что?
+		}
+		return nil
 	}
-	return nil
 }
 
 // где добавить и использовать методы обновления БД?
