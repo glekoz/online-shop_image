@@ -187,9 +187,8 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string)
 		defer func() {
 			<-token
 			err := a.SC.SyncMemoryClean(ctx, serviceDirName) // сделать именованную ошибку, чтобы ещё ошибку при публикации можно было зарегистрировать
-			// хотя по итогу всё равно запрещу ретраить
 			if err != nil {
-				// залогировать
+				ch <- fmt.Errorf("App.ProcessedSave: SC.SyncMemoryClean: %w - %w", err, models.ErrDoNotRetry)
 			}
 		}()
 
@@ -230,7 +229,7 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string)
 			err = a.UserAMT.Publish(ctx, msg)
 		}
 		if err != nil {
-			ch <- fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
+			ch <- fmt.Errorf("App.ProcessedSave: ProductAMT. or UserAMT.Publish: %w - %w", err, models.ErrDoNotRetry)
 			return err
 		}
 

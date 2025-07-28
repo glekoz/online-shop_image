@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -81,21 +80,18 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 		msg, err := json.Marshal(mod)
 		if err != nil {
 			// залогировать
-			return fmt.Errorf("%w: "+err.Error(), models.ErrOperationAction)
+			return err
 		}
 		if serviceName == "product" {
-			err := sc.ProductAMT.Publish(ctx, msg)
-			if err != nil {
-				// залогировать
-				return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
-			}
+			err = sc.ProductAMT.Publish(ctx, msg)
 		} else {
-			err := sc.UserAMT.Publish(ctx, msg)
-			if err != nil {
-				// залогировать
-				return fmt.Errorf("%w: "+err.Error(), models.ErrNetworkAction)
-			}
+			err = sc.UserAMT.Publish(ctx, msg)
 		}
+		if err != nil {
+			// залогировать
+			return err
+		}
+
 		// отправить сообщение о количестве фотографий через AMT, чтобы в сервисе склада инфа обновилась
 		close(sc.DirSync[dir]) // хз, но пусть будет
 		delete(sc.DirSync, dir)
