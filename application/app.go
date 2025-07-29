@@ -157,29 +157,35 @@ func (a *App) InitialSave(ctx context.Context, service, dirName string, img imag
 
 // а этот из AMT
 // значит, нужна система ошибок и контексты
-func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string) error { // img = full path to temp raw image file
+func (a *App) ProcessedSave(ctx context.Context, serviceDirName, tmpImagePath string) error { // img = full path to temp raw image file
 
 	errChan := make(chan error, 1)
 
 	go func(ch chan<- error) (err error) {
-		defer close(ch)
+		var imagePath string
+		defer func() {
+			close(ch)
+			if (ctx.Err() != nil || err != nil) && imagePath != "" {
+				a.Storage.Delete(imagePath)
+			}
+		}()
 
-		img, err := a.Storage.GetRawImage(imgPath)
+		img, err := a.Storage.GetRawImage(tmpImagePath)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: Storage.GetRawImage: %w - %w", err, models.ErrDoNotRetry)
-			return nil
+			return err
 		}
 
 		if ctx.Err() != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
-			return nil
+			return ctx.Err()
 		}
 
 		// блок кода для обработки изображений - пока просто перекрасить в серый
 		grayImg, err := toGrayScale(ctx, img)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: toGrayScale: %w - %w", err, models.ErrDoNotRetry)
-			return nil
+			return err
 		}
 
 		token := a.SC.DirSyncChannel(serviceDirName)
@@ -194,25 +200,24 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string)
 
 		if ctx.Err() != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
-			return nil
+			return ctx.Err()
 		}
 
 		id := uuid.New().String()
-		imagePath, err := a.Storage.Save(ctx, serviceDirName, id, grayImg)
+		imagePath, err = a.Storage.Save(ctx, serviceDirName, id, grayImg)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: Storage.Save: %w - %w", err, models.ErrDoNotRetry)
-			return nil
+			return err
 		}
 
-		defer func() {
-			if ctx.Err() != nil || err != nil {
-				a.Storage.Delete(imagePath) // удалить сохраненное изображение, если не удалось опубликовать сообщение
-			}
-		}()
-
 		// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
-		serviceName := strings.ToLower(filepath.SplitList(serviceDirName)[0])
-		dir := filepath.SplitList(serviceDirName)[1]
+		pathParts := filepath.SplitList(serviceDirName)
+		if len(pathParts) < 2 {
+			ch <- fmt.Errorf("App.ProcessedSave: invalid serviceDirName: %w", models.ErrDoNotRetry)
+			return err
+		}
+		serviceName := strings.ToLower(pathParts[0])
+		dir := pathParts[1]
 		tmpmsg := models.ImageSavedMessage{
 			DirName:   dir,
 			ImagePath: imagePath,
@@ -235,7 +240,7 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string)
 
 		a.SC.ProcessCountIncrement(serviceDirName)
 
-		err = a.Storage.Delete(imgPath) // не самая критичная часть
+		err = a.Storage.Delete(tmpImagePath) // не самая критичная часть
 		if err != nil {
 			// залогировать
 			// не критично, что не удалось удалить временное изображение, но лучше удалить
@@ -255,6 +260,14 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, imgPath string)
 		}
 		return nil
 	}
+}
+
+func (a *App) Delete(ctx context.Context, path string) error {
+	err := a.Storage.Delete(path)
+	if err != nil {
+		return fmt.Errorf("App.Delete: Storage.Delete: %w", err)
+	}
+	return nil
 }
 
 // где добавить и использовать методы обновления БД?

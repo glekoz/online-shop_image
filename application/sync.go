@@ -93,7 +93,7 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 		}
 
 		// отправить сообщение о количестве фотографий через AMT, чтобы в сервисе склада инфа обновилась
-		close(sc.DirSync[dir]) // хз, но пусть будет
+		// close(sc.DirSync[dir]) // хз, но пусть будет - закрывает канал тот, кто в него пишет
 		delete(sc.DirSync, dir)
 		delete(sc.ProcessCount, dir)
 		delete(sc.ReqCount, dir)

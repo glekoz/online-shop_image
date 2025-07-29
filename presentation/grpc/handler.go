@@ -3,38 +3,29 @@ package grpc
 import (
 	"bytes"
 	"errors"
-	"fmt"
+	"image"
 	"io"
+	"net/http"
 
 	"github.com/Gleb988/online-shop_proto/protoimage"
+	"github.com/go-playground/validator/v10"
 	"google.golang.org/grpc"
 )
 
-// А МНЕ НУЖЕН ФЛАГ, РАЗДЕЛЯЮЩИЙ ИЗОБРАЖЕНИЯ
-// НАВЕРНО ПРИ ЗАПРОСЕ НАДО ДОБАВИТЬ КОЛИЧЕСТВО ФОТОГРАФИЙ
-// ДОБАВИТЬ СЕМАФОР В СЕРВЕР, ЧТОБЫ ОГРАНИЧИТЬ ЧИСЛО ОДНОВРЕМЕННО
-// ОБРАБАТЫВАЕМЫХ ФОТОГРАФИЙ
-
-const (
-	maxSize        = 5 << 20
-	maxMessageSize = 1 << 20
-)
-
-type AppAPI interface {
-}
-
-type ImageServer struct {
-	// семафор
-	app AppAPI
-	protoimage.UnimplementedImageServer
-}
+// Первым должно приходить сообщение о метаданных
 
 func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.ImageMessage, protoimage.UploadResult]) error {
+	type RequestData struct {
+		Service        string `validate:"required"`
+		DirName        string `validate:"required"`
+		ImageSize      int    `validate:"gt=0"`
+		GotServiceName bool   `validate:"required"`
+	}
 	var (
-		service        string
-		image          bytes.Buffer
-		gotServiceName bool
+		img     bytes.Buffer
+		reqData = RequestData{ImageSize: img.Len()}
 	)
+
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -44,38 +35,44 @@ func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.I
 			return err
 		}
 		switch {
-		case msg.GetService() != "":
-			if gotServiceName {
-				return fmt.Errorf("service already got")
+		case msg.GetMetadata() != nil:
+			if reqData.GotServiceName {
+				return errors.New("multiple Metadata messages")
 			}
-			service = msg.GetService()
-			gotServiceName = true
-
+			reqData.Service = msg.GetMetadata().Service
+			reqData.DirName = msg.GetMetadata().DirName
+			reqData.GotServiceName = true
 		case len(msg.GetImageChunk()) > 0:
-			_, err := image.Write(msg.GetImageChunk())
+			_, err := img.Write(msg.GetImageChunk())
 			if err != nil {
-				return err // хотя я и так проверяю размер файла
+				return err
 			}
-			if len(image.Bytes()) > maxSize {
-				return fmt.Errorf("image is too big")
+			if img.Len() > maxSize {
+				return errors.New("image is too big")
 			}
 		default:
-			return fmt.Errorf("unexpected arguments")
+			return errors.New("unexpected arguments")
 		}
 	}
 
-	/*
-	   блок валидации
-	       if !gotMetadata == nil {
-	          return status.Error(codes.InvalidArgument, "missing product metadata")
-	      }
-	      if metadata.Name == "" {
-	          return status.Error(codes.InvalidArgument, "product name is required")
-	      }
-	      if imageData.Len() == 0 {
-	          return status.Error(codes.InvalidArgument, "image is required")
-	      }
-	*/
+	imageType := http.DetectContentType(img.Bytes())
+	if imageType != "image/jpeg" && imageType != "image/png" {
+		return errors.New("unsupported format")
+	}
 
-	return nil
+	validate := validator.New(validator.WithRequiredStructEnabled())
+	err := validate.Struct(reqData)
+	if err != nil {
+		return err
+	}
+
+	reader := bytes.NewReader(img.Bytes())
+	i, _, err := image.Decode(reader)
+	if err != nil {
+		return err
+	}
+
+	err = s.app.InitialSave(stream.Context(), reqData.Service, reqData.DirName, i)
+
+	return err
 }

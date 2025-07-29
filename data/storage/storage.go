@@ -23,60 +23,57 @@ func NewStorage(p string) (Storage, error) {
 // надо что-то думать насчет аргументов
 // как будто нужны уже целые пути, а не составные части
 func (s Storage) Save(ctx context.Context, dir, id string, img image.Image) (string, error) {
-	errChan := make(chan error, 1)
-	resultChan := make(chan string, 1)
+	type Result struct {
+		filePath string
+		err      error
+	}
+	resultChan := make(chan Result, 1)
 
-	go func() (err error) {
+	go func() {
+		result := Result{}
 		defer func() {
-			close(errChan)
+			resultChan <- result
 			close(resultChan)
+			if (ctx.Err() != nil || result.err != nil) && result.filePath != "" {
+				// логировать ошибку ниже
+				os.Remove(result.filePath) // удаляем файл, если произошла ошибка
+			}
 		}()
 		pwd := filepath.Join(s.Path, dir)
-		err = os.MkdirAll(pwd, 0o777)
+		err := os.MkdirAll(pwd, 0o755)
 		if err != nil {
-			errChan <- fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)
-			return
-		}
-
-		if err = ctx.Err(); err != nil {
-			errChan <- fmt.Errorf("Storage.Save: context: %w", err)
+			result.err = fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)
 			return
 		}
 
 		filePath := filepath.Join(pwd, id+".jpeg") // ТУТ НУЖЕН ".jpeg"
 		file, err := os.Create(filePath)
 		if err != nil {
-			errChan <- fmt.Errorf("Storage.Save: os.Create: %w", err)
+			result.err = fmt.Errorf("Storage.Save: os.Create: %w", err)
 			return
 		}
-
-		defer func() {
-			file.Close()
-			if ctx.Err() != nil || err != nil {
-				os.Remove(filePath) // если контекст отменен, то удаляем файл, чтобы не оставлять мусор
-			}
-		}()
+		defer file.Close()
 
 		if err = ctx.Err(); err != nil {
-			errChan <- fmt.Errorf("Storage.Save context: %w", err)
+			result.err = fmt.Errorf("Storage.Save: context: %w", err)
 			return
 		}
 
 		err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95})
 		if err != nil {
-			errChan <- fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)
+			result.err = fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)
 			return
 		}
-		resultChan <- filePath // возвращаем путь к файлу, чтобы можно было использовать в других методах
-		return nil
+		result.filePath = filePath // возвращаем путь к файлу, чтобы можно было использовать в других методах
 	}()
 	select {
 	case <-ctx.Done():
 		return "", fmt.Errorf("Storage.Save context: %w", ctx.Err())
-	case err := <-errChan:
-		return "", fmt.Errorf("Storage.Save: %w", err)
-	case filePath := <-resultChan:
-		return filePath, nil
+	case result := <-resultChan:
+		if result.err != nil {
+			return "", fmt.Errorf("Storage.Save: %w", result.err)
+		}
+		return result.filePath, nil
 	}
 }
 
