@@ -1,11 +1,9 @@
 package grpc
 
 import (
-	"context"
-	"image"
 	"net"
 
-	"github.com/Gleb988/online-shop_proto/protoimage"
+	"github.com/glekoz/online-shop_proto/protoimage"
 	"google.golang.org/grpc"
 )
 
@@ -13,10 +11,6 @@ const (
 	maxSize        = 5 << 20
 	maxMessageSize = 1 << 20
 )
-
-type AppAPI interface {
-	InitialSave(ctx context.Context, service, dirName string, img image.Image) error
-}
 
 type ImageServer struct {
 	app AppAPI

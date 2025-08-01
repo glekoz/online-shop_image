@@ -6,23 +6,33 @@ import (
 	"fmt"
 	"image"
 	"path/filepath"
-	"strings"
 
-	"github.com/Gleb988/online-shop_image/internal/models"
+	"github.com/glekoz/online-shop_image/internal/models"
 	"github.com/google/uuid"
 )
 
+const (
+	ImageStatusBusy = "busy"
+	ImageStatusFree = "free"
+)
+
 type StorageAPI interface {
-	Save(ctx context.Context, dir, id string, img image.Image) (string, error)
-	Delete(imgPath string) error
-	// UpdateMainPhoto(dir, id string, img image.Image) error - ЭТО ВООБЩЕ ЗАПАРА СЕРВИСА, А НЕ КАРТИНОК
-	ItemsInDir(dir string) (int, error)
-	GetRawImage(path string) (image.Image, error)
+	Save(ctx context.Context, service, entityID, imageID string, img image.Image) (string, error)
+	Delete(path string) error
+	DeleteAll(service, entityID string) error
+	GetRawImage(imagePath string) (image.Image, error)
+	// UpdateMainPhoto(dir, id string, img image.Image) error - ЭТО НАДО СДЕЛАТЬ
+	//ItemsInDir(dir string) (int, error)
 }
 
-type CacheAPI interface {
-	Get(string) (int, error)
-	Save(string, int) error
+type DBAPI interface {
+	Create(ctx context.Context, service, entityID, status string, maxCount int) error
+	AddImage(ctx context.Context, image models.EntityImage) error
+	SetCountAndFreeStatus(ctx context.Context, service, entityID, status string, images int) error
+	GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error)
+	SetBusyStatus(ctx context.Context, service, entityID, status string) error
+	GetImageCover(ctx context.Context, service, entityID string) (models.EntityImage, error)
+	GetImageList(ctx context.Context, service, entityID string) ([]models.EntityImage, error)
 }
 
 type AMTAPI interface {
@@ -30,6 +40,7 @@ type AMTAPI interface {
 }
 
 type App struct {
+	DB         DBAPI
 	Storage    StorageAPI
 	ProductAMT AMTAPI
 	UserAMT    AMTAPI
@@ -45,9 +56,9 @@ type App struct {
 
 // общение с различными сервисами уже в main функции можно настроить с помощью одного соединения amt.Dial()
 // но настройки у всех разные, поэтому надо 3 экземпляра и передать
-func NewApp(s StorageAPI, product, user, image AMTAPI) *App {
-	syncController := NewSyncController(s, product, user)
-	return &App{Storage: s, ProductAMT: product, UserAMT: user, ImageAMT: image, SC: syncController}
+func NewApp(db DBAPI, s StorageAPI, image AMTAPI) *App {
+	syncController := NewSyncController(db, s)
+	return &App{DB: db, Storage: s, ImageAMT: image, SC: syncController}
 }
 
 // этот метод вызывается из gRPC
@@ -55,35 +66,29 @@ func NewApp(s StorageAPI, product, user, image AMTAPI) *App {
 // которое передается в дальнейших запросах к этому сервису
 // создается в сервисе ещё и таблица со списиком изображений,
 // и таблица с количеством изображений, статусом, есть ли сейчас изображения в обработке, и общем количестве разрешенных иозбражений
-func (a *App) InitialSave(ctx context.Context, service, dirName string, img image.Image) error { // может, сразу изображение давать? 100% зря логику вызывать не буду
+func (a *App) InitialSave(ctx context.Context, service, entityID string, isCover bool, img image.Image) (string, error) { // может, сразу изображение давать? 100% зря логику вызывать не буду
 
-	errChan := make(chan error, 1)
+	type Result struct {
+		imageID string
+		err     error
+	}
 
-	go func(ch chan<- error) (err error) {
+	resChan := make(chan Result, 1)
+
+	go func(ch chan<- Result) {
 		defer close(ch)
 
-		serviceDirName := filepath.Join(service, dirName)
-
-		/*
-			вынести в хендлер
-				imageReader := bytes.NewReader(img)
-				imgimg, _, err := image.Decode(imageReader)
-				if err != nil {
-					ch <- fmt.Errorf("App.InitialSave: image.Decode: %w", err) // мб стоит добавиь свои модели ошибок
-					return nil
-				}
-		*/
 		if ctx.Err() != nil {
-			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
-			return nil
+			ch <- Result{"", fmt.Errorf("App.InitialSave: context: %w", ctx.Err())}
+			return
 		}
 
-		tmpName := uuid.New().String()
-		tmpDirPath := filepath.Join(serviceDirName, "tmp")
-		tmpImgPath, err := a.Storage.Save(ctx, tmpDirPath, tmpName, img)
+		imageID := uuid.New().String()
+		tmpEntityID := filepath.Join(entityID, "tmp")
+		tmpImgPath, err := a.Storage.Save(ctx, service, tmpEntityID, imageID, img)
 		if err != nil {
-			ch <- fmt.Errorf("App.InitialSave: Storage.Save: %w", err) // ок для логирования, но для передачи ошибок выше надо что-то другое придумать
-			return err
+			ch <- Result{"", fmt.Errorf("App.InitialSave: Storage.Save: %w", err)} // ок для логирования, но для передачи ошибок выше надо что-то другое придумать
+			return
 		}
 
 		defer func() {
@@ -93,46 +98,48 @@ func (a *App) InitialSave(ctx context.Context, service, dirName string, img imag
 		}()
 
 		if ctx.Err() != nil {
-			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
+			ch <- Result{"", fmt.Errorf("App.InitialSave: context: %w", ctx.Err())}
 			return
 		}
 
 		amtMsg := models.ProcessImageMessage{
-			ServiceDirName: serviceDirName,
-			ImagePath:      tmpImgPath,
+			Service:      service,
+			EntityID:     entityID,
+			ImageID:      imageID,
+			IsCover:      isCover,
+			TmpImagePath: tmpImgPath,
 		}
 		msg, err := json.Marshal(amtMsg)
 		if err != nil {
-			ch <- fmt.Errorf("App.InitialSave: json.Marshal: %w", err)
-			return err
+			ch <- Result{"", fmt.Errorf("App.InitialSave: json.Marshal: %w", err)}
+			return
 		}
 
 		err = a.ImageAMT.Publish(ctx, msg)
 		if err != nil {
-			ch <- fmt.Errorf("App.InitialSave: ImageAMT.Publish: %w", err)
-			return err
-		}
-
-		if ctx.Err() != nil {
-			ch <- fmt.Errorf("App.InitialSave: context: %w", ctx.Err())
+			ch <- Result{"", fmt.Errorf("App.InitialSave: ImageAMT.Publish: %w", err)}
 			return
 		}
 
+		if ctx.Err() != nil {
+			ch <- Result{"", fmt.Errorf("App.InitialSave: context: %w", ctx.Err())}
+			return
+		}
+		serviceDirName := filepath.Join(service, entityID)
 		a.SC.ReqCountIncrement(serviceDirName)
-
-		return nil
-	}(errChan)
+		ch <- Result{imageID, nil}
+	}(resChan)
 
 	select {
 	case <-ctx.Done():
 		// залогировать
-		return ctx.Err()
-	case err := <-errChan:
-		if err != nil {
+		return "", ctx.Err()
+	case res := <-resChan:
+		if res.err != nil {
 			// залогировать
-			return err // хотя само по себе ерр мб нил, но логировать тогда что?
+			return "", res.err // хотя само по себе ерр мб нил, но логировать тогда что?
 		}
-		return nil
+		return res.imageID, nil
 	}
 	// И ТУТ МНЕ НЕ НУЖНА УНИКАЛЬНАЯ БЛОКИРОВКА НА ДИРЕКТОРИЮ - У МЕНЯ ТОЛЬКО 2 ОБЩИЕ МАПЫ, КОТОРЫЕ СЧИТАЮТ, НЕ ПРЕВЫШЕН ЛИ ЛИМИТ
 	// И ПОТОМ ДЕЛАЙ ЧТО ХОЧЕШЬ, ТОЛЬКО ПУТЬ К ВРЕМЕННОМУ НЕОБРАБОТАННОМУ ИЗОБРАЖЕНИЮ ПЕРЕДАЙ
@@ -157,41 +164,40 @@ func (a *App) InitialSave(ctx context.Context, service, dirName string, img imag
 
 // а этот из AMT
 // значит, нужна система ошибок и контексты
-func (a *App) ProcessedSave(ctx context.Context, serviceDirName, tmpImagePath string) error { // img = full path to temp raw image file
+func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmpImagePath string, isCover bool) error { // img = full path to temp raw image file
 
 	errChan := make(chan error, 1)
 
-	go func(ch chan<- error) (err error) {
-		var imagePath string
-		defer func() {
-			close(ch)
-			if (ctx.Err() != nil || err != nil) && imagePath != "" {
-				a.Storage.Delete(imagePath)
-			}
-		}()
+	go func(ch chan<- error) {
+		//var imagePath string
+		defer close(ch)
 
 		img, err := a.Storage.GetRawImage(tmpImagePath)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: Storage.GetRawImage: %w - %w", err, models.ErrDoNotRetry)
-			return err
+			return
 		}
 
 		if ctx.Err() != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
-			return ctx.Err()
+			return
 		}
 
 		// блок кода для обработки изображений - пока просто перекрасить в серый
 		grayImg, err := toGrayScale(ctx, img)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: toGrayScale: %w - %w", err, models.ErrDoNotRetry)
-			return err
+			return
 		}
 
+		serviceDirName := filepath.Join(service, entityID)
 		token := a.SC.DirSyncChannel(serviceDirName)
 		token <- struct{}{}
+		var isOK bool
 		defer func() {
-			<-token
+			if !isOK {
+				<-token
+			}
 			err := a.SC.SyncMemoryClean(ctx, serviceDirName) // сделать именованную ошибку, чтобы ещё ошибку при публикации можно было зарегистрировать
 			if err != nil {
 				ch <- fmt.Errorf("App.ProcessedSave: SC.SyncMemoryClean: %w - %w", err, models.ErrDoNotRetry)
@@ -200,53 +206,44 @@ func (a *App) ProcessedSave(ctx context.Context, serviceDirName, tmpImagePath st
 
 		if ctx.Err() != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: context: %w - %w", ctx.Err(), models.ErrDoNotRetry)
-			return ctx.Err()
+			return
 		}
 
-		id := uuid.New().String()
-		imagePath, err = a.Storage.Save(ctx, serviceDirName, id, grayImg)
+		imagePath, err := a.Storage.Save(ctx, service, entityID, imageID, grayImg)
 		if err != nil {
 			ch <- fmt.Errorf("App.ProcessedSave: Storage.Save: %w - %w", err, models.ErrDoNotRetry)
-			return err
+			return
 		}
+		<-token
+		isOK = true
+		// не надо удалять временные изображения в случае ошибки
+		/*
+			defer func() {
+				if ctx.Err() != nil || err != nil {
+					a.Storage.Delete(imagePath)
+				}
+			}()
+		*/
 
 		// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
-		pathParts := filepath.SplitList(serviceDirName)
-		if len(pathParts) < 2 {
-			ch <- fmt.Errorf("App.ProcessedSave: invalid serviceDirName: %w", models.ErrDoNotRetry)
-			return err
-		}
-		serviceName := strings.ToLower(pathParts[0])
-		dir := pathParts[1]
-		tmpmsg := models.ImageSavedMessage{
-			DirName:   dir,
-			ImagePath: imagePath,
-		}
-		msg, err := json.Marshal(tmpmsg)
-		if err != nil {
-			ch <- fmt.Errorf("App.ProcessedSave: json.Marshal: %w - %w", err, models.ErrDoNotRetry)
-			return err
-		}
 
-		if serviceName == "product" {
-			err = a.ProductAMT.Publish(ctx, msg)
-		} else {
-			err = a.UserAMT.Publish(ctx, msg)
-		}
+		err = a.DB.AddImage(ctx, models.EntityImage{Service: service, EntityID: entityID, ImagePath: imagePath, IsCover: isCover})
 		if err != nil {
-			ch <- fmt.Errorf("App.ProcessedSave: ProductAMT. or UserAMT.Publish: %w - %w", err, models.ErrDoNotRetry)
-			return err
+			// DoRetry
+			return
 		}
 
 		a.SC.ProcessCountIncrement(serviceDirName)
 
-		err = a.Storage.Delete(tmpImagePath) // не самая критичная часть
-		if err != nil {
-			// залогировать
-			// не критично, что не удалось удалить временное изображение, но лучше удалить
-		}
-		return nil
-
+		// вынесу в sync
+		/*
+			err = a.Storage.Delete(tmpImagePath)
+			if err != nil {
+				// можно вынести в sync - папку целиком удалять
+				// залогировать
+				// не критично, что не удалось удалить временное изображение, но лучше удалить
+			}
+		*/
 	}(errChan)
 
 	select {
@@ -268,6 +265,56 @@ func (a *App) Delete(ctx context.Context, path string) error {
 		return fmt.Errorf("App.Delete: Storage.Delete: %w", err)
 	}
 	return nil
+}
+
+func (a *App) GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error) {
+	// можно добавить КЭШ
+	state, err := a.DB.GetEntityState(ctx, service, entityID)
+	if err != nil {
+		return models.EntityState{}, err
+	}
+	return state, nil
+}
+
+func (a *App) SetBusyStatus(ctx context.Context, service, entityID string) (bool, error) {
+	serviceDirName := filepath.Join(service, entityID)
+	token := a.SC.DirSyncChannel(serviceDirName)
+	token <- struct{}{}
+	defer func() {
+		<-token
+	}()
+	state, err := a.DB.GetEntityState(ctx, service, entityID)
+	if err != nil {
+		return false, err
+	}
+	if state.Status == ImageStatusBusy {
+		return false, nil
+	}
+	err = a.DB.SetBusyStatus(ctx, service, entityID, ImageStatusBusy)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *App) GetCoverImage(ctx context.Context, service, entityID string) (string, error) {
+	image, err := a.DB.GetImageCover(ctx, service, entityID)
+	if err != nil {
+		return "", err
+	}
+	return image.ImagePath, nil
+}
+
+func (a *App) GetImageList(ctx context.Context, service, entityID string) ([]string, error) {
+	images, err := a.DB.GetImageList(ctx, service, entityID)
+	if err != nil {
+		return nil, err
+	}
+	urls := make([]string, 0, 4)
+	for _, image := range images {
+		urls = append(urls, image.ImagePath)
+	}
+	return urls, nil
 }
 
 // где добавить и использовать методы обновления БД?

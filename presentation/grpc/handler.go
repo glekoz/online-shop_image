@@ -2,28 +2,34 @@ package grpc
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"io"
 	"net/http"
 
-	"github.com/Gleb988/online-shop_proto/protoimage"
+	protoimage "github.com/glekoz/online-shop_proto/protoimage"
 	"github.com/go-playground/validator/v10"
 	"google.golang.org/grpc"
 )
+
+type AppAPI interface {
+	InitialSave(ctx context.Context, service, entityID string, isCover bool, img image.Image) (string, error)
+}
 
 // Первым должно приходить сообщение о метаданных
 
 func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.ImageMessage, protoimage.UploadResult]) error {
 	type RequestData struct {
-		Service        string `validate:"required"`
-		DirName        string `validate:"required"`
-		ImageSize      int    `validate:"gt=0"`
-		GotServiceName bool   `validate:"required"`
+		Service     string `validate:"required"`
+		EntityID    string `validate:"required"`
+		IsCover     bool
+		ImageSize   int  `validate:"gt=0"`
+		GotMetadata bool `validate:"required"`
 	}
 	var (
 		img     bytes.Buffer
-		reqData = RequestData{ImageSize: img.Len()}
+		reqData = RequestData{}
 	)
 
 	for {
@@ -36,12 +42,13 @@ func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.I
 		}
 		switch {
 		case msg.GetMetadata() != nil:
-			if reqData.GotServiceName {
+			if reqData.GotMetadata {
 				return errors.New("multiple Metadata messages")
 			}
-			reqData.Service = msg.GetMetadata().Service
-			reqData.DirName = msg.GetMetadata().DirName
-			reqData.GotServiceName = true
+			reqData.Service = msg.GetMetadata().GetService()
+			reqData.EntityID = msg.GetMetadata().GetEntityId()
+			reqData.IsCover = msg.GetMetadata().GetIsCover()
+			reqData.GotMetadata = true
 		case len(msg.GetImageChunk()) > 0:
 			_, err := img.Write(msg.GetImageChunk())
 			if err != nil {
@@ -54,8 +61,10 @@ func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.I
 			return errors.New("unexpected arguments")
 		}
 	}
+	reqData.ImageSize = img.Len()
 
-	imageType := http.DetectContentType(img.Bytes())
+	imageBytes := img.Bytes()
+	imageType := http.DetectContentType(imageBytes)
 	if imageType != "image/jpeg" && imageType != "image/png" {
 		return errors.New("unsupported format")
 	}
@@ -66,13 +75,15 @@ func (s *ImageServer) UploadImage(stream grpc.ClientStreamingServer[protoimage.I
 		return err
 	}
 
-	reader := bytes.NewReader(img.Bytes())
+	reader := bytes.NewReader(imageBytes)
 	i, _, err := image.Decode(reader)
 	if err != nil {
 		return err
 	}
 
-	err = s.app.InitialSave(stream.Context(), reqData.Service, reqData.DirName, i)
-
-	return err
+	imageID, err := s.app.InitialSave(stream.Context(), reqData.Service, reqData.EntityID, reqData.IsCover, i)
+	if err != nil {
+		return stream.SendAndClose(&protoimage.UploadResult{ImageId: ""})
+	}
+	return stream.SendAndClose(&protoimage.UploadResult{ImageId: imageID})
 }

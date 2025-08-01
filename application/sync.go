@@ -2,17 +2,14 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/Gleb988/online-shop_image/internal/models"
 )
 
 type SyncController struct {
-	ProductAMT        AMTAPI
-	UserAMT           AMTAPI
+	DB                DBAPI
+	Storage           StorageAPI
 	ImageCount        map[string]int
 	ReqCountMutex     sync.RWMutex
 	ReqCount          map[string]int
@@ -22,12 +19,12 @@ type SyncController struct {
 	DirSync           map[string]chan struct{}
 }
 
-func NewSyncController(s StorageAPI, product, user AMTAPI) *SyncController {
+func NewSyncController(db DBAPI, storage StorageAPI) *SyncController {
 	imageCount := make(map[string]int)
 	reqCount := make(map[string]int)
 	processCount := make(map[string]int)
 	dirSync := make(map[string]chan struct{})
-	return &SyncController{ProductAMT: product, UserAMT: user,
+	return &SyncController{DB: db, Storage: storage,
 		ImageCount: imageCount, ReqCount: reqCount, ProcessCount: processCount, DirSync: dirSync}
 }
 
@@ -70,29 +67,13 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 	}()
 
 	if sc.ProcessCount[dir] == sc.ReqCount[dir] {
-		serviceName := strings.ToLower(filepath.SplitList(dir)[0])
-		itemDir := filepath.SplitList(dir)[1]
-		mod := models.CompleteImageProcessMessage{
-			SavedItemDir: itemDir,
-			TotalCount:   sc.ProcessCount[dir],
-		}
+		service := strings.ToLower(filepath.SplitList(dir)[0])
+		entityID := filepath.SplitList(dir)[1]
+		count := sc.ProcessCount[dir]
 		// ПРИ ПОЛУЧЕНИИ ЭТОГО СООБЩЕНИЯ ОБНОВЛЯЕТСЯ СТОЛБИК С КОЛИЧЕСТВОМ ИЗОБРАЖЕНИЙ В СЕРВИСЕ
-		msg, err := json.Marshal(mod)
-		if err != nil {
-			// залогировать
-			return err
-		}
-		if serviceName == "product" {
-			err = sc.ProductAMT.Publish(ctx, msg)
-		} else {
-			err = sc.UserAMT.Publish(ctx, msg)
-		}
-		if err != nil {
-			// залогировать
-			return err
-		}
+		sc.DB.SetCountAndFreeStatus(ctx, service, entityID, ImageStatusFree, count)
+		sc.Storage.DeleteAll(service, entityID)
 
-		// отправить сообщение о количестве фотографий через AMT, чтобы в сервисе склада инфа обновилась
 		// close(sc.DirSync[dir]) // хз, но пусть будет - закрывает канал тот, кто в него пишет
 		delete(sc.DirSync, dir)
 		delete(sc.ProcessCount, dir)
