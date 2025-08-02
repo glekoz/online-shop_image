@@ -21,9 +21,8 @@ FOR VALUES IN ('product');
 CREATE TABLE entity_image_list (
     service VARCHAR(50) NOT NULL,
     entity_id VARCHAR(100) NOT NULL,
-    image_path VARCHAR(200) UNIQUE NOT NULL,
+    image_path VARCHAR(200) PRIMARY KEY, -- возможно стоит поменять первичный ключ на другой
     is_cover BOOLEAN NOT NULL,
-    PRIMARY KEY (service_name, entity_id),
     FOREIGN KEY (service_name, entity_id) 
         REFERENCES entity_state(service_name, entity_id)
         ON DELETE CASCADE

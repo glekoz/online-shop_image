@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"path/filepath"
@@ -26,8 +27,10 @@ type StorageAPI interface {
 }
 
 type DBAPI interface {
-	Create(ctx context.Context, service, entityID, status string, maxCount int) error
+	CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error
+	DeleteEntity(ctx context.Context, service, entityID string) error
 	AddImage(ctx context.Context, image models.EntityImage) error
+	DeleteImage(ctx context.Context, imagePath string) error
 	SetCountAndFreeStatus(ctx context.Context, service, entityID, status string, images int) error
 	GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error)
 	SetBusyStatus(ctx context.Context, service, entityID, status string) error
@@ -59,6 +62,22 @@ type App struct {
 func NewApp(db DBAPI, s StorageAPI, image AMTAPI) *App {
 	syncController := NewSyncController(db, s)
 	return &App{DB: db, Storage: s, ImageAMT: image, SC: syncController}
+}
+
+func (a *App) CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error {
+	return a.DB.CreateEntity(ctx, service, entityID, ImageStatusBusy, maxCount)
+}
+
+func (a *App) DeleteEntity(ctx context.Context, service, entityID string) error {
+	err := a.Storage.DeleteAll(service, entityID)
+	if err != nil {
+		return fmt.Errorf("App.DeleteEntity: Storage.DeleteAll: %w", err)
+	}
+	err = a.DB.DeleteEntity(ctx, service, entityID)
+	if err != nil {
+		return fmt.Errorf("App.DeleteEntity: DB.DeleteEntity: %w", err)
+	}
+	return nil
 }
 
 // этот метод вызывается из gRPC
@@ -199,6 +218,7 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 				<-token
 			}
 			err := a.SC.SyncMemoryClean(ctx, serviceDirName) // сделать именованную ошибку, чтобы ещё ошибку при публикации можно было зарегистрировать
+			// так эта ошибка даже нигде не читается, так что просто ЗАЛОГИРОВАТЬ
 			if err != nil {
 				ch <- fmt.Errorf("App.ProcessedSave: SC.SyncMemoryClean: %w - %w", err, models.ErrDoNotRetry)
 			}
@@ -226,6 +246,28 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 		*/
 
 		// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
+
+		if isCover {
+			oldCover, err := a.DB.GetImageCover(ctx, service, entityID)
+			if err != nil {
+				if errors.Is(err, models.ErrNoRows) {
+
+				}
+				ch <- fmt.Errorf("App.ProcessedSave: DB.GetImageCover: %w - %w", err, models.ErrDoNotRetry)
+				return
+			}
+			if oldCover.ImagePath != "" {
+				err = a.Storage.Delete(oldCover.ImagePath)
+				if err != nil {
+					ch <- fmt.Errorf("App.ProcessedSave: Storage.Delete: %w - %w", err, models.ErrDoNotRetry)
+				}
+				err = a.DB.DeleteImage(ctx, oldCover.ImagePath)
+				if err != nil {
+					ch <- fmt.Errorf("App.ProcessedSave: DB.DeleteImage: %w - %w", err, models.ErrDoNotRetry)
+				}
+			}
+
+		}
 
 		err = a.DB.AddImage(ctx, models.EntityImage{Service: service, EntityID: entityID, ImagePath: imagePath, IsCover: isCover})
 		if err != nil {
@@ -259,10 +301,14 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 	}
 }
 
-func (a *App) Delete(ctx context.Context, path string) error {
-	err := a.Storage.Delete(path)
+func (a *App) DeleteImage(ctx context.Context, imagePath string) error {
+	err := a.Storage.Delete(imagePath)
 	if err != nil {
 		return fmt.Errorf("App.Delete: Storage.Delete: %w", err)
+	}
+	err = a.DB.DeleteImage(ctx, imagePath)
+	if err != nil {
+		return fmt.Errorf("App.Delete: DB.DeleteImage: %w", err)
 	}
 	return nil
 }

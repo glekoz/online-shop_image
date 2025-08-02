@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -65,21 +66,23 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 		sc.ReqCountMutex.RUnlock()
 		sc.ProcessCountMutex.RUnlock()
 	}()
+	var err error
 
 	if sc.ProcessCount[dir] == sc.ReqCount[dir] {
 		service := strings.ToLower(filepath.SplitList(dir)[0])
 		entityID := filepath.SplitList(dir)[1]
 		count := sc.ProcessCount[dir]
 		// ПРИ ПОЛУЧЕНИИ ЭТОГО СООБЩЕНИЯ ОБНОВЛЯЕТСЯ СТОЛБИК С КОЛИЧЕСТВОМ ИЗОБРАЖЕНИЙ В СЕРВИСЕ
-		sc.DB.SetCountAndFreeStatus(ctx, service, entityID, ImageStatusFree, count)
-		sc.Storage.DeleteAll(service, entityID)
+		err1 := sc.DB.SetCountAndFreeStatus(ctx, service, entityID, ImageStatusFree, count)
+		err2 := sc.Storage.DeleteAll(service, entityID)
+		err = errors.Join(err1, err2)
 
 		// close(sc.DirSync[dir]) // хз, но пусть будет - закрывает канал тот, кто в него пишет
 		delete(sc.DirSync, dir)
 		delete(sc.ProcessCount, dir)
 		delete(sc.ReqCount, dir)
 	}
-	return nil
+	return err
 }
 
 func (sc *SyncController) DirSyncChannel(dir string) chan struct{} {

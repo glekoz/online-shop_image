@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/glekoz/online-shop_image/internal/models"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,14 +27,29 @@ func (r *Repository) AddImage(ctx context.Context, image models.EntityImage) err
 	return r.q.AddImage(ctx, AddImageParams(image))
 }
 
-func (r *Repository) Create(ctx context.Context, service, entityID, status string, maxCount int) error {
-	params := CreateParams{
+func (r *Repository) DeleteImage(ctx context.Context, imagePath string) error {
+	if imagePath == "" {
+		return models.ErrInvalidInput
+	}
+	return r.q.DeleteImage(ctx, imagePath)
+}
+
+func (r *Repository) CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error {
+	params := CreateEntityParams{
 		Service:  service,
 		EntityID: entityID,
 		Status:   status,
 		MaxCount: int32(maxCount),
 	}
-	return r.q.Create(ctx, params)
+	return r.q.CreateEntity(ctx, params)
+}
+
+func (r *Repository) DeleteEntity(ctx context.Context, service, entityID string) error {
+	params := DeleteEntityParams{
+		Service:  service,
+		EntityID: entityID,
+	}
+	return r.q.DeleteEntity(ctx, params)
 }
 
 func (r *Repository) GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error) {
@@ -61,6 +78,9 @@ func (r *Repository) GetImageCover(ctx context.Context, service, entityID string
 	}
 	image, err := r.q.GetImageCover(ctx, params)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.EntityImage{}, models.ErrNoRows
+		}
 		return models.EntityImage{}, err
 	}
 

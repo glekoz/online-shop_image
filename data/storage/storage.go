@@ -99,9 +99,6 @@ func (s Storage) Delete(path string) error {
 }
 
 func (s Storage) DeleteAll(service, entityID string) error {
-	if service == "" || entityID == "" {
-		return fmt.Errorf("invalid imput")
-	}
 	path := filepath.Join(s.Path, service, entityID)
 	return os.RemoveAll(path)
 }

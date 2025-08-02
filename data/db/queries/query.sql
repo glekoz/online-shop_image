@@ -1,10 +1,18 @@
--- name: Create :exec
+-- name: CreateEntity :exec
 INSERT INTO entity_state(service, entity_id, image_count, status, max_count)
 VALUES ($1, $2, 0, $3, $4);
+
+-- name: DeleteEntity :exec
+DELETE FROM entity_state
+WHERE service = $1 AND entity_id = $2;
 
 -- name: AddImage :exec
 INSERT INTO entity_image_list(service, entity_id, image_path, is_cover)
 VALUES ($1, $2, $3, $4);
+
+-- name: DeleteImage :exec
+DELETE FROM entity_image_list
+WHERE image_path = $1;
 
 -- name: GetEntityState :one
 SELECT *

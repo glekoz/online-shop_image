@@ -31,25 +31,50 @@ func (q *Queries) AddImage(ctx context.Context, arg AddImageParams) error {
 	return err
 }
 
-const create = `-- name: Create :exec
+const createEntity = `-- name: CreateEntity :exec
 INSERT INTO entity_state(service, entity_id, image_count, status, max_count)
 VALUES ($1, $2, 0, $3, $4)
 `
 
-type CreateParams struct {
+type CreateEntityParams struct {
 	Service  string
 	EntityID string
 	Status   string
 	MaxCount int32
 }
 
-func (q *Queries) Create(ctx context.Context, arg CreateParams) error {
-	_, err := q.db.Exec(ctx, create,
+func (q *Queries) CreateEntity(ctx context.Context, arg CreateEntityParams) error {
+	_, err := q.db.Exec(ctx, createEntity,
 		arg.Service,
 		arg.EntityID,
 		arg.Status,
 		arg.MaxCount,
 	)
+	return err
+}
+
+const deleteEntity = `-- name: DeleteEntity :exec
+DELETE FROM entity_state
+WHERE service = $1 AND entity_id = $2
+`
+
+type DeleteEntityParams struct {
+	Service  string
+	EntityID string
+}
+
+func (q *Queries) DeleteEntity(ctx context.Context, arg DeleteEntityParams) error {
+	_, err := q.db.Exec(ctx, deleteEntity, arg.Service, arg.EntityID)
+	return err
+}
+
+const deleteImage = `-- name: DeleteImage :exec
+DELETE FROM entity_image_list
+WHERE image_path = $1
+`
+
+func (q *Queries) DeleteImage(ctx context.Context, imagePath string) error {
+	_, err := q.db.Exec(ctx, deleteImage, imagePath)
 	return err
 }
 
