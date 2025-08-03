@@ -71,9 +71,9 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 	if sc.ProcessCount[dir] == sc.ReqCount[dir] {
 		service := strings.ToLower(filepath.SplitList(dir)[0])
 		entityID := filepath.SplitList(dir)[1]
-		count := sc.ProcessCount[dir]
+		// count := sc.ProcessCount[dir]
 		// ПРИ ПОЛУЧЕНИИ ЭТОГО СООБЩЕНИЯ ОБНОВЛЯЕТСЯ СТОЛБИК С КОЛИЧЕСТВОМ ИЗОБРАЖЕНИЙ В СЕРВИСЕ
-		err1 := sc.DB.SetCountAndFreeStatus(ctx, service, entityID, ImageStatusFree, count)
+		err1 := sc.DB.SetStatus(ctx, service, entityID, ImageStatusFree)
 		err2 := sc.Storage.DeleteAll(service, entityID)
 		err = errors.Join(err1, err2)
 

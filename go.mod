@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/glekoz/online-shop_amt v0.1.5
-	github.com/glekoz/online-shop_proto v0.1.6
+	github.com/glekoz/online-shop_proto v0.1.7
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5

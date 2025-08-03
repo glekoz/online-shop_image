@@ -10,31 +10,36 @@ WHERE service = $1 AND entity_id = $2;
 INSERT INTO entity_image_list(service, entity_id, image_path, is_cover)
 VALUES ($1, $2, $3, $4);
 
+-- name: IncrementImageCount :exec
+UPDATE entity_state
+SET image_count = image_count + 1
+WHERE service = $1 AND entity_id = $2;
+
 -- name: DeleteImage :exec
 DELETE FROM entity_image_list
 WHERE image_path = $1;
+
+-- name: DecrementImageCount :exec
+UPDATE entity_state
+SET image_count = image_count + 1
+WHERE service = $1 AND entity_id = $2;
 
 -- name: GetEntityState :one
 SELECT *
 FROM entity_state
 WHERE service = $1 AND entity_id = $2;
 
--- name: SetBusyStatus :exec
+-- name: SetStatus :exec
 UPDATE entity_state
 SET status = $1
 WHERE service = $2 AND entity_id = $3;
-
--- name: SetCountAndFreeStatus :exec
-UPDATE entity_state
-SET image_count = image_count + $1, status = $2
-WHERE service = $3 AND entity_id = $4;
 
 -- name: GetImageList :many
 SELECT *
 FROM entity_image_list
 WHERE service = $1 AND entity_id = $2;
 
--- name: GetImageCover :one
+-- name: GetCoverImage :one
 SELECT *
 FROM entity_image_list
 WHERE service = $1 AND entity_id = $2 AND is_cover = true;

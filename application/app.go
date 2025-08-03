@@ -30,11 +30,11 @@ type DBAPI interface {
 	CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error
 	DeleteEntity(ctx context.Context, service, entityID string) error
 	AddImage(ctx context.Context, image models.EntityImage) error
-	DeleteImage(ctx context.Context, imagePath string) error
-	SetCountAndFreeStatus(ctx context.Context, service, entityID, status string, images int) error
+	DeleteImage(ctx context.Context, service, entityID, imagePath string) error
+	//SetCountAndFreeStatus(ctx context.Context, service, entityID, status string, images int) error
 	GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error)
-	SetBusyStatus(ctx context.Context, service, entityID, status string) error
-	GetImageCover(ctx context.Context, service, entityID string) (models.EntityImage, error)
+	SetStatus(ctx context.Context, service, entityID, status string) error
+	GetCoverImage(ctx context.Context, service, entityID string) (models.EntityImage, error)
 	GetImageList(ctx context.Context, service, entityID string) ([]models.EntityImage, error)
 }
 
@@ -64,7 +64,7 @@ func NewApp(db DBAPI, s StorageAPI, image AMTAPI) *App {
 	return &App{DB: db, Storage: s, ImageAMT: image, SC: syncController}
 }
 
-func (a *App) CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error {
+func (a *App) CreateEntity(ctx context.Context, service, entityID string, maxCount int) error {
 	return a.DB.CreateEntity(ctx, service, entityID, ImageStatusBusy, maxCount)
 }
 
@@ -247,28 +247,6 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 
 		// ТУТ ДОБАВЛЯЕТСЯ ИНФОРМАЦИЯ О ПУТИ К ИЗОБРАЖЕНИЮ В СООТВ. ТАБЛИЦУ СЕРВИСА
 
-		if isCover {
-			oldCover, err := a.DB.GetImageCover(ctx, service, entityID)
-			if err != nil {
-				if errors.Is(err, models.ErrNoRows) {
-
-				}
-				ch <- fmt.Errorf("App.ProcessedSave: DB.GetImageCover: %w - %w", err, models.ErrDoNotRetry)
-				return
-			}
-			if oldCover.ImagePath != "" {
-				err = a.Storage.Delete(oldCover.ImagePath)
-				if err != nil {
-					ch <- fmt.Errorf("App.ProcessedSave: Storage.Delete: %w - %w", err, models.ErrDoNotRetry)
-				}
-				err = a.DB.DeleteImage(ctx, oldCover.ImagePath)
-				if err != nil {
-					ch <- fmt.Errorf("App.ProcessedSave: DB.DeleteImage: %w - %w", err, models.ErrDoNotRetry)
-				}
-			}
-
-		}
-
 		err = a.DB.AddImage(ctx, models.EntityImage{Service: service, EntityID: entityID, ImagePath: imagePath, IsCover: isCover})
 		if err != nil {
 			// DoRetry
@@ -301,12 +279,12 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 	}
 }
 
-func (a *App) DeleteImage(ctx context.Context, imagePath string) error {
+func (a *App) DeleteImage(ctx context.Context, service, entityID, imagePath string) error {
 	err := a.Storage.Delete(imagePath)
 	if err != nil {
 		return fmt.Errorf("App.Delete: Storage.Delete: %w", err)
 	}
-	err = a.DB.DeleteImage(ctx, imagePath)
+	err = a.DB.DeleteImage(ctx, service, entityID, imagePath)
 	if err != nil {
 		return fmt.Errorf("App.Delete: DB.DeleteImage: %w", err)
 	}
@@ -336,7 +314,28 @@ func (a *App) SetBusyStatus(ctx context.Context, service, entityID string) (bool
 	if state.Status == ImageStatusBusy {
 		return false, nil
 	}
-	err = a.DB.SetBusyStatus(ctx, service, entityID, ImageStatusBusy)
+	err = a.DB.SetStatus(ctx, service, entityID, ImageStatusBusy)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *App) SetFreeStatus(ctx context.Context, service, entityID string) (bool, error) {
+	serviceDirName := filepath.Join(service, entityID)
+	token := a.SC.DirSyncChannel(serviceDirName)
+	token <- struct{}{}
+	defer func() {
+		<-token
+	}()
+	state, err := a.DB.GetEntityState(ctx, service, entityID)
+	if err != nil {
+		return false, err
+	}
+	if state.Status == ImageStatusFree {
+		return false, errors.New("unexpected shit")
+	}
+	err = a.DB.SetStatus(ctx, service, entityID, ImageStatusFree)
 	if err != nil {
 		return false, err
 	}
@@ -344,7 +343,7 @@ func (a *App) SetBusyStatus(ctx context.Context, service, entityID string) (bool
 }
 
 func (a *App) GetCoverImage(ctx context.Context, service, entityID string) (string, error) {
-	image, err := a.DB.GetImageCover(ctx, service, entityID)
+	image, err := a.DB.GetCoverImage(ctx, service, entityID)
 	if err != nil {
 		return "", err
 	}
@@ -356,7 +355,7 @@ func (a *App) GetImageList(ctx context.Context, service, entityID string) ([]str
 	if err != nil {
 		return nil, err
 	}
-	urls := make([]string, 0, 4)
+	urls := make([]string, 0, 10)
 	for _, image := range images {
 		urls = append(urls, image.ImagePath)
 	}

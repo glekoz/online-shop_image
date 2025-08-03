@@ -9,8 +9,8 @@ github.com/gabriel-vasile/mimetype v1.4.8 h1:FfZ3gj38NjllZIeJAmMhr+qKL8Wu+nOoI3G
 github.com/gabriel-vasile/mimetype v1.4.8/go.mod h1:ByKUIKGjh1ODkGM1asKUbQZOLGrPjydw3hYPU2YU9t8=
 github.com/glekoz/online-shop_amt v0.1.5 h1:c6o+M90wA4mpYK1uBoyGl2uFU++Vv4RJCYPdmynur48=
 github.com/glekoz/online-shop_amt v0.1.5/go.mod h1:yOBO1e9J7Wl78DtyY3VOZmeUNanTxLatBYZY4dvzdHY=
-github.com/glekoz/online-shop_proto v0.1.6 h1:sVwMJc2q3iPWvjVgeKRNsRjh0NrEK0qJLAtdTaStEBc=
-github.com/glekoz/online-shop_proto v0.1.6/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
+github.com/glekoz/online-shop_proto v0.1.7 h1:v4IK8thsomgjs0G2II6jWBG8y97LTSXwTjMufiBwZlQ=
+github.com/glekoz/online-shop_proto v0.1.7/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
 github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
 github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=

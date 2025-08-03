@@ -13,12 +13,12 @@ const (
 )
 
 type ImageServer struct {
-	app AppAPI
+	App AppAPI
 	protoimage.UnimplementedImageServer
 }
 
 func NewServer(app AppAPI) *ImageServer {
-	return &ImageServer{app: app}
+	return &ImageServer{App: app}
 }
 
 func (IS *ImageServer) RunServer(app AppAPI) error { // все общие компоненты должны настраиваться в мейне

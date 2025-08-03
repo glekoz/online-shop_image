@@ -53,6 +53,22 @@ func (q *Queries) CreateEntity(ctx context.Context, arg CreateEntityParams) erro
 	return err
 }
 
+const decrementImageCount = `-- name: DecrementImageCount :exec
+UPDATE entity_state
+SET image_count = image_count + 1
+WHERE service = $1 AND entity_id = $2
+`
+
+type DecrementImageCountParams struct {
+	Service  string
+	EntityID string
+}
+
+func (q *Queries) DecrementImageCount(ctx context.Context, arg DecrementImageCountParams) error {
+	_, err := q.db.Exec(ctx, decrementImageCount, arg.Service, arg.EntityID)
+	return err
+}
+
 const deleteEntity = `-- name: DeleteEntity :exec
 DELETE FROM entity_state
 WHERE service = $1 AND entity_id = $2
@@ -78,6 +94,29 @@ func (q *Queries) DeleteImage(ctx context.Context, imagePath string) error {
 	return err
 }
 
+const getCoverImage = `-- name: GetCoverImage :one
+SELECT service, entity_id, image_path, is_cover
+FROM entity_image_list
+WHERE service = $1 AND entity_id = $2 AND is_cover = true
+`
+
+type GetCoverImageParams struct {
+	Service  string
+	EntityID string
+}
+
+func (q *Queries) GetCoverImage(ctx context.Context, arg GetCoverImageParams) (EntityImageList, error) {
+	row := q.db.QueryRow(ctx, getCoverImage, arg.Service, arg.EntityID)
+	var i EntityImageList
+	err := row.Scan(
+		&i.Service,
+		&i.EntityID,
+		&i.ImagePath,
+		&i.IsCover,
+	)
+	return i, err
+}
+
 const getEntityState = `-- name: GetEntityState :one
 SELECT service, entity_id, image_count, status, max_count
 FROM entity_state
@@ -98,29 +137,6 @@ func (q *Queries) GetEntityState(ctx context.Context, arg GetEntityStateParams) 
 		&i.ImageCount,
 		&i.Status,
 		&i.MaxCount,
-	)
-	return i, err
-}
-
-const getImageCover = `-- name: GetImageCover :one
-SELECT service, entity_id, image_path, is_cover
-FROM entity_image_list
-WHERE service = $1 AND entity_id = $2 AND is_cover = true
-`
-
-type GetImageCoverParams struct {
-	Service  string
-	EntityID string
-}
-
-func (q *Queries) GetImageCover(ctx context.Context, arg GetImageCoverParams) (EntityImageList, error) {
-	row := q.db.QueryRow(ctx, getImageCover, arg.Service, arg.EntityID)
-	var i EntityImageList
-	err := row.Scan(
-		&i.Service,
-		&i.EntityID,
-		&i.ImagePath,
-		&i.IsCover,
 	)
 	return i, err
 }
@@ -161,42 +177,35 @@ func (q *Queries) GetImageList(ctx context.Context, arg GetImageListParams) ([]E
 	return items, nil
 }
 
-const setBusyStatus = `-- name: SetBusyStatus :exec
+const incrementImageCount = `-- name: IncrementImageCount :exec
+UPDATE entity_state
+SET image_count = image_count + 1
+WHERE service = $1 AND entity_id = $2
+`
+
+type IncrementImageCountParams struct {
+	Service  string
+	EntityID string
+}
+
+func (q *Queries) IncrementImageCount(ctx context.Context, arg IncrementImageCountParams) error {
+	_, err := q.db.Exec(ctx, incrementImageCount, arg.Service, arg.EntityID)
+	return err
+}
+
+const setStatus = `-- name: SetStatus :exec
 UPDATE entity_state
 SET status = $1
 WHERE service = $2 AND entity_id = $3
 `
 
-type SetBusyStatusParams struct {
+type SetStatusParams struct {
 	Status   string
 	Service  string
 	EntityID string
 }
 
-func (q *Queries) SetBusyStatus(ctx context.Context, arg SetBusyStatusParams) error {
-	_, err := q.db.Exec(ctx, setBusyStatus, arg.Status, arg.Service, arg.EntityID)
-	return err
-}
-
-const setCountAndFreeStatus = `-- name: SetCountAndFreeStatus :exec
-UPDATE entity_state
-SET image_count = image_count + $1, status = $2
-WHERE service = $3 AND entity_id = $4
-`
-
-type SetCountAndFreeStatusParams struct {
-	ImageCount int32
-	Status     string
-	Service    string
-	EntityID   string
-}
-
-func (q *Queries) SetCountAndFreeStatus(ctx context.Context, arg SetCountAndFreeStatusParams) error {
-	_, err := q.db.Exec(ctx, setCountAndFreeStatus,
-		arg.ImageCount,
-		arg.Status,
-		arg.Service,
-		arg.EntityID,
-	)
+func (q *Queries) SetStatus(ctx context.Context, arg SetStatusParams) error {
+	_, err := q.db.Exec(ctx, setStatus, arg.Status, arg.Service, arg.EntityID)
 	return err
 }

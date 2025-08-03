@@ -24,14 +24,42 @@ func NewRepository(ctx context.Context, dsn string) (*Repository, error) {
 }
 
 func (r *Repository) AddImage(ctx context.Context, image models.EntityImage) error {
-	return r.q.AddImage(ctx, AddImageParams(image))
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := r.q.WithTx(tx)
+	err = qtx.AddImage(ctx, AddImageParams(image))
+	if err != nil {
+		return err
+	}
+	err = qtx.IncrementImageCount(ctx, IncrementImageCountParams{Service: image.Service, EntityID: image.EntityID})
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-func (r *Repository) DeleteImage(ctx context.Context, imagePath string) error {
+func (r *Repository) DeleteImage(ctx context.Context, service, entityID, imagePath string) error {
 	if imagePath == "" {
 		return models.ErrInvalidInput
 	}
-	return r.q.DeleteImage(ctx, imagePath)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	qtx := r.q.WithTx(tx)
+	err = qtx.DeleteImage(ctx, imagePath)
+	if err != nil {
+		return err
+	}
+	err = qtx.DecrementImageCount(ctx, DecrementImageCountParams{Service: service, EntityID: entityID})
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) CreateEntity(ctx context.Context, service, entityID, status string, maxCount int) error {
@@ -71,12 +99,12 @@ func (r *Repository) GetEntityState(ctx context.Context, service, entityID strin
 	}, nil
 }
 
-func (r *Repository) GetImageCover(ctx context.Context, service, entityID string) (models.EntityImage, error) {
-	params := GetImageCoverParams{
+func (r *Repository) GetCoverImage(ctx context.Context, service, entityID string) (models.EntityImage, error) {
+	params := GetCoverImageParams{
 		Service:  service,
 		EntityID: entityID,
 	}
-	image, err := r.q.GetImageCover(ctx, params)
+	image, err := r.q.GetCoverImage(ctx, params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return models.EntityImage{}, models.ErrNoRows
@@ -103,19 +131,21 @@ func (r *Repository) GetImageList(ctx context.Context, service, entityID string)
 	return images, nil
 }
 
-func (r *Repository) SetBusyStatus(ctx context.Context, service, entityID, status string) error {
-	params := SetBusyStatusParams{
+func (r *Repository) SetStatus(ctx context.Context, service, entityID, status string) error {
+	params := SetStatusParams{
 		Status:   status,
 		Service:  service,
 		EntityID: entityID,
 	}
-	err := r.q.SetBusyStatus(ctx, params)
+	err := r.q.SetStatus(ctx, params)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
+/*
+заменяется инкрементом изображений и фри статусом после сохранения
 func (r *Repository) SetCountAndFreeStatus(ctx context.Context, service, entityID, status string, images int) error {
 	params := SetCountAndFreeStatusParams{
 		ImageCount: int32(images),
@@ -125,3 +155,4 @@ func (r *Repository) SetCountAndFreeStatus(ctx context.Context, service, entityI
 	}
 	return r.q.SetCountAndFreeStatus(ctx, params)
 }
+*/
