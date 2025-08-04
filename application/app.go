@@ -65,7 +65,7 @@ func NewApp(db DBAPI, s StorageAPI, image AMTAPI) *App {
 }
 
 func (a *App) CreateEntity(ctx context.Context, service, entityID string, maxCount int) error {
-	return a.DB.CreateEntity(ctx, service, entityID, ImageStatusBusy, maxCount)
+	return a.DB.CreateEntity(ctx, service, entityID, ImageStatusFree, maxCount)
 }
 
 func (a *App) DeleteEntity(ctx context.Context, service, entityID string) error {
@@ -291,13 +291,16 @@ func (a *App) DeleteImage(ctx context.Context, service, entityID, imagePath stri
 	return nil
 }
 
-func (a *App) GetEntityState(ctx context.Context, service, entityID string) (models.EntityState, error) {
+func (a *App) IsStatusFree(ctx context.Context, service, entityID string) (bool, error) {
 	// можно добавить КЭШ
 	state, err := a.DB.GetEntityState(ctx, service, entityID)
 	if err != nil {
-		return models.EntityState{}, err
+		return false, err
 	}
-	return state, nil
+	if state.Status == ImageStatusBusy {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (a *App) SetBusyStatus(ctx context.Context, service, entityID string) (bool, error) {
