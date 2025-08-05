@@ -15,6 +15,10 @@ github.com/glekoz/online-shop_proto v0.1.11 h1:euVzjTGdlz3k5ecbZMpnuVkCrl+nPQ4hm
 github.com/glekoz/online-shop_proto v0.1.11/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
 github.com/glekoz/online-shop_proto v0.1.12 h1:ICmR2c8newoSFEiWXbURoi4cTVBCu+C2H5QyKcKRlfM=
 github.com/glekoz/online-shop_proto v0.1.12/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
+github.com/glekoz/online-shop_proto v0.1.13 h1:YT4Gm+xIuz4qW/PPS8L36msA6MMxYwoyd4LJk1at8No=
+github.com/glekoz/online-shop_proto v0.1.13/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
+github.com/glekoz/online-shop_proto v0.1.14 h1:sRH/cfCirKdwQOX63i1gZRsHOxfLevYIP0KMRJ81jMI=
+github.com/glekoz/online-shop_proto v0.1.14/go.mod h1:uJTP0E7WmwwWJM3GntPhatzPerFqNGOra+brnkl4SA0=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
 github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
 github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=

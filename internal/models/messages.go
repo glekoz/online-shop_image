@@ -10,6 +10,24 @@ type ProcessImageMessage struct {
 	TmpImagePath string `json:"image_path"`
 }
 
+// gRPC модели ниже
+
+type CommonMetadata struct {
+	Service  string `validate:"required"`
+	EntityID string `validate:"required"`
+}
+
+type CreateEntityRequest struct {
+	CommonMetadata
+	MaxCount int `validate:"gt=0"`
+}
+
+type DeleteImageRequest struct {
+	CommonMetadata
+	Images []string `validate:"required"`
+}
+
+/*
 // Это сообщение используется между сервисами,
 // чтобы оин добавили новую запись в таблицу со списком изображений
 type ImageSavedMessage struct {
@@ -25,3 +43,4 @@ type SaveImageMessage struct {
 	EntityID   string `json:"entity_id"`
 	TotalCount int    `json:"total_count"`
 }
+*/

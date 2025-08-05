@@ -43,12 +43,10 @@ type AMTAPI interface {
 }
 
 type App struct {
-	DB         DBAPI
-	Storage    StorageAPI
-	ProductAMT AMTAPI
-	UserAMT    AMTAPI
-	ImageAMT   AMTAPI
-	SC         *SyncController
+	DB       DBAPI
+	Storage  StorageAPI
+	ImageAMT AMTAPI
+	SC       *SyncController
 	// Logger говорят, надо саму ошибку в месте появления логировать
 	// Jaeger tracer
 }
@@ -181,7 +179,7 @@ func (a *App) InitialSave(ctx context.Context, service, entityID string, isCover
 	// и не позволит отправить ещё фотографии уже в шлюзе
 }
 
-// а этот из AMT
+// а этот из AMT - уже там настраивается параллельность
 // значит, нужна система ошибок и контексты
 func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmpImagePath string, isCover bool) error { // img = full path to temp raw image file
 
