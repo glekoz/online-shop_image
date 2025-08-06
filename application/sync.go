@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/glekoz/online-shop_image/internal/models"
 )
 
 type SyncController struct {
@@ -74,6 +76,7 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 		// count := sc.ProcessCount[dir]
 		// ПРИ ПОЛУЧЕНИИ ЭТОГО СООБЩЕНИЯ ОБНОВЛЯЕТСЯ СТОЛБИК С КОЛИЧЕСТВОМ ИЗОБРАЖЕНИЙ В СЕРВИСЕ
 		err1 := sc.DB.SetStatus(ctx, service, entityID, ImageStatusFree)
+		// ретраить из-за моментальных сетевых ошибок
 		err2 := sc.Storage.DeleteAll(service, entityID)
 		err = errors.Join(err1, err2)
 
@@ -82,7 +85,7 @@ func (sc *SyncController) SyncMemoryClean(ctx context.Context, dir string) error
 		delete(sc.ProcessCount, dir)
 		delete(sc.ReqCount, dir)
 	}
-	return err
+	return models.NewError("SyncMemoryClean", dir, err)
 }
 
 func (sc *SyncController) DirSyncChannel(dir string) chan struct{} {

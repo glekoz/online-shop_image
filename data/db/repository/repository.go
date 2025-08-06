@@ -6,6 +6,7 @@ import (
 
 	"github.com/glekoz/online-shop_image/internal/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,6 +33,13 @@ func (r *Repository) AddImage(ctx context.Context, image models.EntityImage) err
 	qtx := r.q.WithTx(tx)
 	err = qtx.AddImage(ctx, AddImageParams(image))
 	if err != nil {
+		var PgErr *pgconn.PgError
+		if errors.As(err, &PgErr) {
+			err1 := err.(*pgconn.PgError)
+			if err1.Code == models.UniqueViolation {
+				return models.ErrUniqueViolation
+			}
+		}
 		return err
 	}
 	err = qtx.IncrementImageCount(ctx, IncrementImageCountParams{Service: image.Service, EntityID: image.EntityID})
@@ -69,7 +77,18 @@ func (r *Repository) CreateEntity(ctx context.Context, service, entityID, status
 		Status:   status,
 		MaxCount: int32(maxCount),
 	}
-	return r.q.CreateEntity(ctx, params)
+	err := r.q.CreateEntity(ctx, params)
+	if err != nil {
+		var PgErr *pgconn.PgError
+		if errors.As(err, &PgErr) {
+			err1 := err.(*pgconn.PgError)
+			if err1.Code == models.UniqueViolation {
+				return models.ErrUniqueViolation
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Repository) DeleteEntity(ctx context.Context, service, entityID string) error {
@@ -87,6 +106,9 @@ func (r *Repository) GetEntityState(ctx context.Context, service, entityID strin
 	}
 	state, err := r.q.GetEntityState(ctx, params)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.EntityState{}, models.ErrNotFound
+		}
 		return models.EntityState{}, err
 	}
 
@@ -107,7 +129,7 @@ func (r *Repository) GetCoverImage(ctx context.Context, service, entityID string
 	image, err := r.q.GetCoverImage(ctx, params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return models.EntityImage{}, models.ErrNoRows
+			return models.EntityImage{}, models.ErrNotFound
 		}
 		return models.EntityImage{}, err
 	}
@@ -122,6 +144,9 @@ func (r *Repository) GetImageList(ctx context.Context, service, entityID string)
 	}
 	dbImages, err := r.q.GetImageList(ctx, params)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
 		return nil, err
 	}
 	var images []models.EntityImage

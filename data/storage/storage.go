@@ -2,11 +2,12 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"image"
 	"image/jpeg"
 	"os"
 	"path/filepath"
+
+	"github.com/glekoz/online-shop_image/internal/models"
 )
 
 type Storage struct {
@@ -14,8 +15,9 @@ type Storage struct {
 }
 
 func NewStorage(p string) (Storage, error) {
-	if err := os.MkdirAll(p, 0o777); err != nil {
-		return Storage{}, fmt.Errorf("NewStorage: os.MkdirAll: %w", err)
+	loc := "Storage.NewStorage"
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		return Storage{}, models.NewError(loc, p, err)
 	}
 	return Storage{Path: p}, nil
 }
@@ -23,6 +25,7 @@ func NewStorage(p string) (Storage, error) {
 // надо что-то думать насчет аргументов
 // как будто нужны уже целые пути, а не составные части
 func (s Storage) Save(ctx context.Context, service, entityID, imageID string, img image.Image) (string, error) {
+	loc := "Storage.Save"
 	type Result struct {
 		imagePath string
 		err       error
@@ -36,14 +39,14 @@ func (s Storage) Save(ctx context.Context, service, entityID, imageID string, im
 		pwd := filepath.Join(s.Path, service, entityID)
 		err := os.MkdirAll(pwd, 0o755)
 		if err != nil {
-			ch <- Result{"", fmt.Errorf("Storage.Save: os.MkdirAll: %w", err)}
+			ch <- Result{"", models.NewError(loc, pwd, err)}
 			return
 		}
 
 		imagePath := filepath.Join(pwd, imageID+".jpeg")
 		file, err := os.Create(imagePath)
 		if err != nil {
-			ch <- Result{"", fmt.Errorf("Storage.Save: os.Create: %w", err)}
+			ch <- Result{"", models.NewError(loc, imagePath, err)}
 			return
 		}
 		defer func() {
@@ -54,23 +57,23 @@ func (s Storage) Save(ctx context.Context, service, entityID, imageID string, im
 		}()
 
 		if err = ctx.Err(); err != nil {
-			ch <- Result{"", fmt.Errorf("Storage.Save: context: %w", err)}
+			ch <- Result{"", models.NewError(loc, "context", err)}
 			return
 		}
 
 		err = jpeg.Encode(file, img, &jpeg.Options{Quality: 95})
 		if err != nil {
-			ch <- Result{"", fmt.Errorf("Storage.Save: jpeg.Encode: %w", err)}
+			ch <- Result{"", models.NewError(loc, imageID, err)}
 			return
 		}
 		ch <- Result{imagePath, nil} // возвращаем путь к файлу, чтобы можно было использовать в других методах
 	}(resultChan)
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("Storage.Save context: %w", ctx.Err())
+		return "", models.NewError(loc, "context", ctx.Err())
 	case result := <-resultChan:
 		if result.err != nil {
-			return "", fmt.Errorf("Storage.Save: %w", result.err)
+			return "", result.err
 		}
 		return result.imagePath, nil
 	}
@@ -88,30 +91,37 @@ defer func() {
 */
 
 func (s Storage) Delete(path string) error {
+	loc := "Storage.Delete"
 	if path == "" {
-		return fmt.Errorf("invalid input")
+		return models.NewError(loc, "path == \"\"", models.ErrInvalidInput)
 	}
 	err := os.Remove(path)
 	if err != nil {
-		return fmt.Errorf("Storage.Delete: os.Remove: %w", err)
+		return models.NewError(loc, path, err)
 	}
 	return nil
 }
 
 func (s Storage) DeleteAll(service, entityID string) error {
+	loc := "Storage.DeleteAll"
 	path := filepath.Join(s.Path, service, entityID)
-	return os.RemoveAll(path)
+	err := os.RemoveAll(path)
+	if err != nil {
+		return models.NewError(loc, path, err)
+	}
+	return nil
 }
 
 func (s Storage) GetRawImage(imagePath string) (image.Image, error) {
+	loc := "Storage.GetRawImage"
 	file, err := os.Open(imagePath)
 	if err != nil {
-		return nil, fmt.Errorf("Storage.GetRawImage: os.Open: %w", err)
+		return nil, models.NewError(loc, imagePath, err)
 	}
 	defer file.Close()
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return nil, fmt.Errorf("Storage.GetRawImage: image.Decode: %w", err)
+		return nil, models.NewError(loc, imagePath, err)
 	}
 	return img, nil
 }
