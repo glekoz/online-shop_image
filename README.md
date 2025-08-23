@@ -105,5 +105,3 @@ Set env vars to point to the MinIO instance during test runs and run your integr
 * Provide Helm chart for Kubernetes deployment.
 
 ---
-
-*Generated README template for `online-shop_image`. Please adapt any command names, endpoints, and env var names to match the actual implementation in your repo.*
