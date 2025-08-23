@@ -103,5 +103,3 @@ Set env vars to point to the MinIO instance during test runs and run your integr
 * Add rate limiting and request size throttling.
 * Add thumbnail cache invalidation strategies and lifecycle management.
 * Provide Helm chart for Kubernetes deployment.
-
----
