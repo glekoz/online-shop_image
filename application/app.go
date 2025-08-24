@@ -64,10 +64,10 @@ func NewApp(db DBAPI, s StorageAPI, image AMTAPI) *App {
 func (a *App) CreateEntity(ctx context.Context, service, entityID string, maxCount int) error {
 	loc := "App.CreateEntity"
 	if err := a.DB.CreateEntity(ctx, service, entityID, ImageStatusFree, maxCount); err != nil {
-		if errors.Is(err, models.ErrUniqueViolation) {
-			// как-нибудь залогировать по-особенному
-			return models.NewError(loc, service+" "+entityID, err)
-		}
+		//if errors.Is(err, models.ErrUniqueViolation) {
+		// как-нибудь залогировать по-особенному - В ХЕНДЛЕРЕ
+		//	return models.NewError(loc, service+" "+entityID, err)
+		//}
 		return models.NewError(loc, service+" "+entityID, err)
 	}
 	return nil
@@ -202,7 +202,7 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 
 		img, err := a.Storage.GetRawImage(tmpImagePath)
 		if err != nil {
-			ch <- errors.Join(models.NewError(loc, tmpImagePath, err), models.ErrDoNotRetry)
+			ch <- models.NewError(loc, tmpImagePath, err)
 			return
 		}
 
@@ -258,6 +258,7 @@ func (a *App) ProcessedSave(ctx context.Context, service, entityID, imageID, tmp
 
 		err = a.DB.AddImage(ctx, models.EntityImage{Service: service, EntityID: entityID, ImagePath: imagePath, IsCover: isCover})
 		if err != nil {
+			ch <- models.NewError(loc, imagePath, err)
 			// DoRetry
 			return
 		}

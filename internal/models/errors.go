@@ -25,10 +25,10 @@ const (
 )
 
 var (
-	ErrNotFound        = errors.New("no result found")
-	ErrInvalidInput    = errors.New("invalid input")
-	ErrFS              = errors.New("file system misbehaved")
-	ErrDoNotRetry      = errors.New("do not retry")
+	ErrNotFound     = errors.New("no result found")
+	ErrInvalidInput = errors.New("invalid input")
+	ErrFS           = errors.New("file system misbehaved")
+	//ErrDoNotRetry      = errors.New("do not retry")
 	ErrUniqueViolation = errors.New("unique violation")
 )
 

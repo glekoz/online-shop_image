@@ -29,8 +29,8 @@ func (a *AMTHandler) ProcessMessage(ctx context.Context, msg amqp091.Delivery) e
 		return amt.NewErrNack("Invalid input")
 	}
 	err = a.App.ProcessedSave(ctx, imgmsg.Service, imgmsg.EntityID, imgmsg.ImageID, imgmsg.TmpImagePath, imgmsg.IsCover)
-	if errors.Is(err, models.ErrDoNotRetry) {
-		return amt.NewErrNack("Unprocessable entity")
+	if errors.Is(err, ctx.Err()) {
+		return err
 	}
-	return err
+	return amt.NewErrNack("Unprocessable entity")
 }

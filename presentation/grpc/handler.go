@@ -52,8 +52,15 @@ func (s *ImageServer) CreateEntity(ctx context.Context, req *protoimage.CreateEn
 
 	err = s.App.CreateEntity(ctx, reqData.Service, reqData.EntityID, reqData.MaxCount)
 	if err != nil {
-		// обработка ошибок на уровне приложения, чтобы тут можно было норм ошибки выдать
-		return &protoimage.BoolResponse{Ok: false}, status.Error(codes.AlreadyExists, "123")
+		switch {
+		case errors.Is(err, models.ErrUniqueViolation):
+			err := err.(models.Error)
+			return &protoimage.BoolResponse{Ok: false}, status.Error(codes.AlreadyExists, err.Error())
+		case errors.Is(err, ctx.Err()):
+			return &protoimage.BoolResponse{Ok: false}, status.Error(codes.DeadlineExceeded, err.Error())
+		default:
+			return &protoimage.BoolResponse{Ok: false}, status.Error(codes.Internal, err.Error())
+		}
 	}
 	return &protoimage.BoolResponse{Ok: true}, nil
 }
@@ -80,14 +87,14 @@ func (s *ImageServer) DeleteEntity(ctx context.Context, req *protoimage.CommonMe
 		return &protoimage.BoolResponse{Ok: false}, status.Error(codes.Internal, err.Error())
 	}
 	if !ok {
-		return &protoimage.BoolResponse{Ok: false}, status.Error(codes.FailedPrecondition, "system is busy")
+		return &protoimage.BoolResponse{Ok: false}, status.Error(codes.Unavailable, "system is busy") // или codes.FailedPrecondition
 	}
 	// free статус уже некуда писать
 	err = s.App.DeleteEntity(ctx, cm.Service, cm.EntityID)
 	if err != nil {
 		return &protoimage.BoolResponse{Ok: false}, status.Error(codes.Internal, err.Error())
 	}
-	return &protoimage.BoolResponse{Ok: false}, nil
+	return &protoimage.BoolResponse{Ok: true}, nil
 }
 
 func (s *ImageServer) IsStatusFree(ctx context.Context, req *protoimage.CommonMetadata) (*protoimage.BoolResponse, error) {
@@ -136,7 +143,7 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 
 	msg, err := stream.Recv()
 	if err != nil {
-		return err // вот тут уже можно статусы добавить
+		return status.Error(codes.Internal, "streaming error")
 	}
 	cm.Service = msg.GetMetadata().GetService()
 	cm.EntityID = msg.GetMetadata().GetEntityId()
@@ -145,7 +152,15 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 	validate := validator.New(validator.WithRequiredStructEnabled())
 	err = validate.Struct(cm)
 	if err != nil {
-		return err // вот тут уже можно статусы добавить
+		errs, ok := err.(validator.ValidationErrors)
+		if !ok {
+			return status.Error(codes.Internal, "error validation")
+		}
+		fields := make([]string, 2)
+		for _, err := range errs {
+			fields = append(fields, err.StructField())
+		}
+		return status.Error(codes.InvalidArgument, strings.Join(fields, " "))
 	}
 
 	ok, err := s.App.SetBusyStatus(stream.Context(), cm.Service, cm.EntityID)
@@ -153,7 +168,7 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 		return err // вот тут уже можно статусы добавить, чтобы заретриаить и попозже ещё раз попробовать
 	}
 	if !ok {
-		return status.Error(codes.FailedPrecondition, "system is busy")
+		return status.Error(codes.Unavailable, "system is busy") // или codes.FailedPrecondition
 	}
 	defer func() {
 		_, err := s.App.SetFreeStatus(stream.Context(), cm.Service, cm.EntityID)
@@ -169,7 +184,7 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return err // вот тут уже можно статусы добавить
+			return status.Error(codes.Internal, "streaming error")
 		}
 		//
 		// ОДИН РАЗ ПРОВЕРИТЬ МЕТАДАННЫЕ
@@ -178,14 +193,14 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 		case len(msg.GetImageChunk()) > 0:
 			_, err := img.Write(msg.GetImageChunk())
 			if err != nil {
-				return status.Error(codes.InvalidArgument, "image chunk")
+				return status.Error(codes.InvalidArgument, "invalid image chunk")
 			}
 			if img.Len() > maxSize {
-				return errors.New("image is too big") // вот тут уже можно статусы добавить
+				return status.Error(codes.InvalidArgument, "image is too big")
 			}
 		case msg.GetIsCover() != nil:
 			if img.Len() < 1 {
-				return status.Error(codes.InvalidArgument, "Cover flag should be sent after image")
+				return status.Error(codes.InvalidArgument, "cover flag should be sent after image")
 			}
 			imageBytes := img.Bytes()
 			imageType := http.DetectContentType(imageBytes)
@@ -196,7 +211,7 @@ func (s *ImageServer) UploadImage(stream grpc.BidiStreamingServer[protoimage.Upl
 			reader := bytes.NewReader(imageBytes)
 			i, _, err := image.Decode(reader)
 			if err != nil {
-				return err // вот тут уже можно статусы добавить
+				return status.Error(codes.InvalidArgument, "decoding failed")
 			}
 
 			isCover := msg.GetIsCover().GetValue()
@@ -244,7 +259,7 @@ func (s *ImageServer) DeleteImage(ctx context.Context, req *protoimage.DeleteIma
 		return &protoimage.DeleteImageResponse{Resp: nil}, status.Error(codes.Internal, err.Error()) // вот тут уже можно статусы добавить, чтобы заретриаить и попозже ещё раз попробовать
 	}
 	if !ok {
-		return &protoimage.DeleteImageResponse{Resp: nil}, status.Error(codes.FailedPrecondition, "system is busy")
+		return &protoimage.DeleteImageResponse{Resp: nil}, status.Error(codes.Unavailable, "system is busy")
 	}
 	defer func() {
 		_, err := s.App.SetFreeStatus(ctx, reqData.Service, reqData.EntityID)
@@ -258,7 +273,7 @@ func (s *ImageServer) DeleteImage(ctx context.Context, req *protoimage.DeleteIma
 		Error error
 	}
 	for _, image := range reqData.Images {
-		if err = s.App.DeleteImage(ctx, image); err != nil {
+		if err = s.App.DeleteImage(ctx, image); err != nil { // можно переделать, чтобы метод принимал слайс или вариадик
 			errs = append(errs, struct {
 				Image string
 				Error error
@@ -270,7 +285,7 @@ func (s *ImageServer) DeleteImage(ctx context.Context, req *protoimage.DeleteIma
 		for _, err := range errs {
 			ress = append(ress, &protoimage.UploadImageResponse{ImageId: err.Image, Err: err.Error.Error()})
 		}
-		return &protoimage.DeleteImageResponse{Resp: ress}, status.Error(codes.InvalidArgument, "failed to delete")
+		return &protoimage.DeleteImageResponse{Resp: ress}, status.Error(codes.InvalidArgument, "failed to delete some of the photos")
 	}
 
 	return &protoimage.DeleteImageResponse{Resp: nil}, nil
@@ -296,7 +311,12 @@ func (s *ImageServer) GetCoverImage(ctx context.Context, req *protoimage.CommonM
 	path, err := s.App.GetCoverImage(ctx, cm.Service, cm.EntityID)
 	if err != nil {
 		// обработка различных ошибок, а не только этой
-		return &protoimage.GetCoverImageResponse{CoverImagePath: ""}, status.Error(codes.NotFound, "no such image")
+		switch {
+		case errors.Is(err, models.ErrNotFound):
+			return &protoimage.GetCoverImageResponse{CoverImagePath: ""}, status.Error(codes.NotFound, "no such image")
+		default:
+			return &protoimage.GetCoverImageResponse{CoverImagePath: ""}, status.Error(codes.Internal, "no way to get cover")
+		}
 	}
 	return &protoimage.GetCoverImageResponse{CoverImagePath: path}, nil
 }
@@ -321,7 +341,12 @@ func (s *ImageServer) GetImageList(ctx context.Context, req *protoimage.CommonMe
 	images, err := s.App.GetImageList(ctx, cm.Service, cm.EntityID)
 	if err != nil {
 		// обработка различных ошибок, а не только этой
-		return &protoimage.GetImageListResponse{ImagePath: nil}, status.Error(codes.NotFound, "no images")
+		switch {
+		case errors.Is(err, models.ErrNotFound):
+			return &protoimage.GetImageListResponse{ImagePath: nil}, status.Error(codes.NotFound, "no images")
+		default:
+			return &protoimage.GetImageListResponse{ImagePath: nil}, status.Error(codes.Internal, "no way to get images")
+		}
 	}
 	return &protoimage.GetImageListResponse{ImagePath: images}, nil
 }
